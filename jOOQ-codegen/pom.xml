@@ -7,11 +7,12 @@
     <parent>
         <groupId>org.jooq</groupId>
         <artifactId>jooq-parent</artifactId>
-        <version>3.18.8-SNAPSHOT</version>
+        <version>3.18.7</version>
     </parent>
 
-    <artifactId>jooq-codegen</artifactId>
-    <name>jOOQ Codegen</name>
+    <groupId>cz.commity.jooq</groupId>
+    <artifactId>jooq-god-codegen</artifactId>
+    <name>jOOQ GOD Codegen</name>
 
     <licenses>
         <license>
@@ -27,6 +28,14 @@
 
 
     </licenses>
+
+    <distributionManagement>
+        <repository>
+            <id>github</id>
+            <name>GitHub Commity.cz Apache Maven Packages</name>
+            <url>https://maven.pkg.github.com/commity-cz/jooq-god-generator</url>
+        </repository>
+    </distributionManagement>
 
     <build>
         <plugins>

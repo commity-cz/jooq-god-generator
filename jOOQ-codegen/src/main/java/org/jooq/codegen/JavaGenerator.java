@@ -8318,7 +8318,7 @@ public class JavaGenerator extends AbstractGenerator {
         return effectivelyNotNull(column.getType(resolver(out)));
     }
 
-    private boolean effectivelyNotNull(DataTypeDefinition type) {
+    protected boolean effectivelyNotNull(DataTypeDefinition type) {
         return !type.isNullable()
             && !type.isDefaulted()
             && !type.isIdentity();

@@ -1,0 +1,28 @@
+name: Deploy to repository
+
+on:
+  push:
+    #branches: [version-3.18.0-branch]
+    paths:
+      - 'jOOQ-codegen/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+      - name: Build with Maven
+        working-directory: jOOQ-codegen/src/main/java/org/jooq/codegen
+        run: |
+          mvn -B deploy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
