@@ -87,6 +87,8 @@ import org.jooq.UDTRecord;
 import org.jooq.UniqueKey;
 import org.jooq.exception.DataAccessException;
 import org.jooq.impl.QOM.CreateTable;
+import org.jooq.tools.reflect.Reflect;
+import org.jooq.tools.reflect.ReflectException;
 // ...
 // ...
 
@@ -254,7 +256,37 @@ public final class Internal {
      */
     @NotNull
     public static final <T> Domain<T> createDomain(Schema schema, Name name, DataType<T> type, Check<?>... checks) {
-        return new DomainImpl<>(schema, name, type, checks);
+        return createDomain(schema, name, type, null, null, checks);
+    }
+
+    /**
+     * Factory method for domain specifications.
+     */
+    @NotNull
+    public static final <T, U> Domain<U> createDomain(Schema schema, Name name, DataType<T> type, Converter<T, U> converter, Check<?>... checks) {
+        return createDomain(schema, name, type, converter, null, checks);
+    }
+
+    /**
+     * Factory method for domain specifications.
+     */
+    @NotNull
+    public static final <T, U> Domain<U> createDomain(Schema schema, Name name, DataType<T> type, Binding<T, U> binding, Check<?>... checks) {
+        return createDomain(schema, name, type, null, binding, checks);
+    }
+
+    /**
+     * Factory method for domain specifications.
+     */
+    @NotNull
+    public static final <T, X, U> Domain<U> createDomain(Schema schema, Name name, DataType<T> type, Converter<X, U> converter, Binding<T, X> binding, Check<?>... checks) {
+        Binding<T, U> actualBinding = DefaultBinding.newBinding(converter, type, binding);
+        DataType<U> actualType =
+            converter == null && binding == null
+          ? (DataType<U>) type
+          : type.asConvertedDataType(actualBinding);
+
+        return new DomainImpl<>(schema, name, actualType, checks);
     }
 
     /**
@@ -492,7 +524,7 @@ public final class Internal {
      * Whether this is a commercial edition of jOOQ.
      */
     public static final boolean commercial() {
-        return CONFIG.commercial();
+        return CONFIG.get().commercial();
     }
 
     /**
@@ -500,7 +532,7 @@ public final class Internal {
      * if not.
      */
     public static final boolean commercial(Supplier<String> logMessage) {
-        return CONFIG.commercial(logMessage);
+        return CONFIG.get().commercial(logMessage);
     }
 
     /**
@@ -508,7 +540,7 @@ public final class Internal {
      * a message, if not.
      */
     public static final void requireCommercial(Supplier<String> logMessage) throws DataAccessException {
-        CONFIG.requireCommercial(logMessage);
+        CONFIG.get().requireCommercial(logMessage);
     }
 
 
@@ -616,7 +648,7 @@ public final class Internal {
      * account FindBugs' <code>RV_ABSOLUTE_VALUE_OF_HASHCODE</code> pattern
      */
     public static final int hash(QueryPart part) {
-        return hash0(CTX.render(part));
+        return hash0(CTX.get().render(part));
     }
 
     static final int hash0(Object object) {
@@ -630,9 +662,41 @@ public final class Internal {
             return 0x7FFFFFF & object.hashCode();
     }
 
-    private static final ConverterContext CONVERTER_SCOPE = new DefaultConverterContext(CONFIG);
+    private static final Lazy<ConverterContext> CONVERTER_SCOPE = Lazy.of(() -> new DefaultConverterContext(CONFIG.get()));
 
     public static final ConverterContext converterContext() {
-        return CONVERTER_SCOPE;
+        return CONVERTER_SCOPE.get();
+    }
+
+    private static final Lazy<Integer> JAVA_VERSION = Lazy.of(() -> {
+        try {
+
+            return Reflect.onClass(Runtime.class)
+
+                // Since Java 9
+                .call("version")
+
+                // Since Java 10
+                .call("feature")
+                .get();
+        }
+        catch (ReflectException e) {
+            return 8;
+        }
+    });
+
+    /**
+     * Get the Java version (relevant to jOOQ) as an int.
+     * <p>
+     * Supported versions are:
+     * <ul>
+     * <li>8</li>
+     * <li>11</li>
+     * <li>17</li>
+     * <li>21</li>
+     * </ul>
+     */
+    public static final int javaVersion() {
+        return JAVA_VERSION.get();
     }
 }

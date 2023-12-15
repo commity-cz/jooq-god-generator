@@ -658,15 +658,19 @@ implements
 
 
 
-    public final J partitionBy(Field<?>... fields) {
-        return partitionBy(Tools.list(fields));
-    }
+
+
+
+
+
+
+
 
 
 
 
     @SuppressWarnings("unchecked")
-    public final J partitionBy(Collection<? extends Field<?>> fields) {
+    final J partitionBy0(Collection<? extends Field<?>> fields) {
         rhsPartitionBy.addAll(fields);
         return (J) this;
     }
@@ -729,9 +733,9 @@ implements
             return onKey((ForeignKey<?, ?>) rightToLeft.get(0), rhs, lhs);
 
         if (rightToLeft.isEmpty() && leftToRight.isEmpty())
-            throw onKeyException(OnKeyExceptionReason.NOT_FOUND, leftToRight, rightToLeft);
+            throw onKeyException(OnKeyExceptionReason.NOT_FOUND, null, null);
         else
-            throw onKeyException(OnKeyExceptionReason.AMBIGUOUS, null, null);
+            throw onKeyException(OnKeyExceptionReason.AMBIGUOUS, leftToRight, rightToLeft);
     }
 
     @Override
@@ -943,6 +947,14 @@ implements
     @Override
     public final J orNotExists(Select<?> select) {
         return or(notExists(select));
+    }
+
+    // [#14906] Re-declare internal-type-returning method here, to prevent J
+    //          from leaking into client code.
+    @SuppressWarnings("unchecked")
+    @Override
+    public final J join(TableLike<?> table, JoinType type) {
+        return (J) super.join(table, type);
     }
 
     // -------------------------------------------------------------------------

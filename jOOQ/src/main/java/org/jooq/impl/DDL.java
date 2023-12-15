@@ -48,16 +48,21 @@ import static org.jooq.DDLFlag.SCHEMA;
 import static org.jooq.DDLFlag.SEQUENCE;
 import static org.jooq.DDLFlag.TABLE;
 import static org.jooq.DDLFlag.UNIQUE;
+// ...
 import static org.jooq.TableOptions.TableType.VIEW;
 import static org.jooq.impl.Comparators.KEY_COMP;
 import static org.jooq.impl.Comparators.NAMED_COMP;
+import static org.jooq.impl.Comparators.TABLE_VIEW_COMP;
 import static org.jooq.impl.DSL.constraint;
 import static org.jooq.impl.Tools.map;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 import org.jooq.Check;
 import org.jooq.Comment;
@@ -80,21 +85,33 @@ import org.jooq.Index;
 import org.jooq.Key;
 import org.jooq.Meta;
 import org.jooq.Named;
+// ...
 import org.jooq.Queries;
 import org.jooq.Query;
+import org.jooq.Record;
+import org.jooq.SQLDialect;
 import org.jooq.Schema;
+import org.jooq.Select;
 import org.jooq.Sequence;
+import org.jooq.SortOrder;
 import org.jooq.Table;
 import org.jooq.TableOptions;
 import org.jooq.TableOptions.OnCommit;
 import org.jooq.TableOptions.TableType;
 import org.jooq.UniqueKey;
+import org.jooq.tools.JooqLogger;
 import org.jooq.tools.StringUtils;
 
 /**
  * @author Lukas Eder
  */
 final class DDL {
+
+    private static final JooqLogger      log = JooqLogger.getLogger(DDL.class);
+
+
+
+
 
     private final DSLContext             ctx;
     private final DDLExportConfiguration configuration;
@@ -156,6 +173,8 @@ final class DDL {
         return asList(s0);
     }
 
+    static final Pattern P_CREATE_VIEW = Pattern.compile("^(?i:\\bcreate\\b.*?\\bview\\b.*?\\bas\\b\\s+)(.*)$");
+
     @SuppressWarnings({ "rawtypes", "unchecked" })
     private final Query applyAs(CreateViewAsStep q, TableOptions options) {
         if (options.select() != null)
@@ -163,11 +182,30 @@ final class DDL {
         else if (StringUtils.isBlank(options.source()))
             return q.as("");
 
-        Query[] queries = ctx.parser().parse(options.source()).queries();
-        if (queries.length > 0 && queries[0] instanceof CreateViewImpl)
-            return q.as(((CreateViewImpl<?>) queries[0]).$select());
-        else
-            return q.as("");
+        try {
+            Query[] queries = ctx.parser().parse(options.source()).queries();
+
+            if (queries.length > 0) {
+                if (queries[0] instanceof CreateViewImpl<?> cv)
+                    return q.as(cv.$select());
+                else if (queries[0] instanceof Select<?> s)
+                    return q.as(s);
+                else
+                    return q.as("");
+            }
+            else
+                return q.as("");
+        }
+        catch (ParserException e) {
+            log.info("Cannot parse view source: " + options.source(), e);
+
+            // [#15238] If the command prefix is supplied, use a heursitic where the view
+            //          body is expected to start after the first "AS" keyword
+            if (options.source().toLowerCase().startsWith("create"))
+                return q.as(P_CREATE_VIEW.matcher(options.source()).replaceFirst("$1"));
+            else
+                return q.as(options.source());
+        }
     }
 
     final Query createSequence(Sequence<?> sequence) {
@@ -364,36 +402,52 @@ final class DDL {
                 else
                     queries.add(ctx.createSchema(schema.getUnqualifiedName()));
 
+        // [#15291] There exist some corner cases where inline constraints don't work, including when there's an
+        //          explicit or implicit CONSTRAINT .. USING INDEX clause where an index has to be created before
+        //          the constraint.
+        Set<Table<?>> tablesWithInlineConstraints = new HashSet<>();
+
         if (configuration.flags().contains(TABLE)) {
             for (Schema schema : schemas) {
-                for (Table<?> table : sortIf(schema.getTables(), !configuration.respectTableOrder())) {
+                for (Table<?> table : sortTablesIf(schema.getTables(), !configuration.respectTableOrder())) {
                     List<Constraint> constraints = new ArrayList<>();
 
-                    constraints.addAll(primaryKeys(table));
-                    constraints.addAll(uniqueKeys(table));
-                    constraints.addAll(checks(table));
+                    if (!hasConstraintsUsingIndexes(table)) {
+                        tablesWithInlineConstraints.add(table);
+
+                        constraints.addAll(primaryKeys(table));
+                        constraints.addAll(uniqueKeys(table));
+                        constraints.addAll(checks(table));
+                    }
 
                     queries.addAll(createTableOrView(table, constraints));
                 }
             }
         }
-        else {
-            for (Schema schema : schemas) {
-                if (configuration.flags().contains(PRIMARY_KEY))
-                    for (Table<?> table : sortIf(schema.getTables(), !configuration.respectTableOrder()))
+
+        if (configuration.flags().contains(INDEX))
+            for (Schema schema : schemas)
+                for (Table<?> table : sortIf(schema.getTables(), !configuration.respectTableOrder()))
+                    queries.addAll(createIndex(table));
+
+        for (Schema schema : schemas) {
+            if (configuration.flags().contains(PRIMARY_KEY))
+                for (Table<?> table : sortIf(schema.getTables(), !configuration.respectTableOrder()))
+                    if (!tablesWithInlineConstraints.contains(table))
                         for (Constraint constraint : sortIf(primaryKeys(table), !configuration.respectConstraintOrder()))
                             queries.add(ctx.alterTable(table).add(constraint));
 
-                if (configuration.flags().contains(UNIQUE))
-                    for (Table<?> table : sortIf(schema.getTables(), !configuration.respectTableOrder()))
+            if (configuration.flags().contains(UNIQUE))
+                for (Table<?> table : sortIf(schema.getTables(), !configuration.respectTableOrder()))
+                    if (!tablesWithInlineConstraints.contains(table))
                         for (Constraint constraint : sortIf(uniqueKeys(table), !configuration.respectConstraintOrder()))
                             queries.add(ctx.alterTable(table).add(constraint));
 
-                if (configuration.flags().contains(CHECK))
-                    for (Table<?> table : sortIf(schema.getTables(), !configuration.respectTableOrder()))
+            if (configuration.flags().contains(CHECK))
+                for (Table<?> table : sortIf(schema.getTables(), !configuration.respectTableOrder()))
+                    if (!tablesWithInlineConstraints.contains(table))
                         for (Constraint constraint : sortIf(checks(table), !configuration.respectConstraintOrder()))
                             queries.add(ctx.alterTable(table).add(constraint));
-            }
         }
 
         if (configuration.flags().contains(FOREIGN_KEY))
@@ -417,12 +471,27 @@ final class DDL {
                 for (Table<?> table : sortIf(schema.getTables(), !configuration.respectTableOrder()))
                     queries.addAll(commentOn(table));
 
-        if (configuration.flags().contains(INDEX))
-            for (Schema schema : schemas)
-                for (Table<?> table : sortIf(schema.getTables(), !configuration.respectTableOrder()))
-                    queries.addAll(createIndex(table));
-
         return ctx.queries(queries);
+    }
+
+    private final <R extends Record> boolean hasConstraintsUsingIndexes(Table<R> table) {
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        return false;
     }
 
     private final <K extends Key<?>> List<K> sortKeysIf(List<K> input, boolean sort) {
@@ -440,6 +509,20 @@ final class DDL {
         if (sort) {
             List<N> result = new ArrayList<>(input);
             result.sort(NAMED_COMP);
+            return result;
+        }
+
+        return input;
+    }
+
+    private final <T extends Table<?>> List<T> sortTablesIf(List<T> input, boolean sort) {
+
+        if (sort) {
+            List<T> result = new ArrayList<>(input);
+            result.sort(NAMED_COMP);
+
+            // [#15326] Tables should always appear before views
+            result.sort(TABLE_VIEW_COMP);
             return result;
         }
 

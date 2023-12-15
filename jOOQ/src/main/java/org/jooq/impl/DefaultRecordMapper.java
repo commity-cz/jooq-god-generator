@@ -59,6 +59,7 @@ import static org.jooq.impl.Tools.row0;
 import static org.jooq.tools.reflect.Reflect.accessible;
 
 import java.beans.ConstructorProperties;
+import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodHandles.Lookup;
 import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
@@ -90,7 +91,11 @@ import jakarta.persistence.Column;
 
 import org.jooq.Attachable;
 import org.jooq.Configuration;
+import org.jooq.Converter;
+import org.jooq.ConverterProvider;
 import org.jooq.Field;
+import org.jooq.JSON;
+import org.jooq.JSONB;
 import org.jooq.Record;
 import org.jooq.Record1;
 import org.jooq.RecordMapper;
@@ -100,6 +105,7 @@ import org.jooq.Result;
 import org.jooq.Table;
 import org.jooq.TableField;
 import org.jooq.TableRecord;
+import org.jooq.XML;
 import org.jooq.conf.Settings;
 import org.jooq.exception.MappingException;
 import org.jooq.tools.StringUtils;
@@ -121,26 +127,13 @@ import org.jooq.tools.reflect.ReflectException;
  * specific arrays fails, a {@link MappingException} is thrown, wrapping
  * conversion exceptions.
  * <p>
- * <h5>If <code>&lt;E&gt;</code> is a field "value type" and
- * <code>&lt;R extends Record1&lt;?&gt;&gt;</code>, i.e. it has exactly one
- * column:</h5>
+ * <h5>If the supplied type is an interface or an abstract class</h5>
  * <p>
- * Any Java type available from {@link SQLDataType} qualifies as a well-known
- * "value type" that can be converted from a single-field {@link Record1}. The
- * following rules apply:
- * <p>
- * <ul>
- * <li>If <code>&lt;E&gt;</code> is a reference type like {@link String},
- * {@link Integer}, {@link Long}, {@link Timestamp}, etc., then converting from
- * <code>&lt;R&gt;</code> to <code>&lt;E&gt;</code> is mere convenience for
- * calling {@link Record#getValue(int, Class)} with
- * <code>fieldIndex = 0</code></li>
- * <li>If <code>&lt;E&gt;</code> is a primitive type, the mapping result will be
- * the corresponding wrapper type. <code>null</code> will map to the primitive
- * type's initialisation value, e.g. <code>0</code> for <code>int</code>,
- * <code>0.0</code> for <code>double</code>, <code>false</code> for
- * <code>boolean</code>.</li>
- * </ul>
+ * Abstract types are instantiated using Java reflection {@link Proxy}
+ * mechanisms. The returned proxy will wrap a {@link HashMap} containing
+ * properties mapped by getters and setters of the supplied type. Methods (even
+ * JPA-annotated ones) other than standard POJO getters and setters are not
+ * supported. Details can be seen in {@link Reflect#as(Class)}.
  * <p>
  * <h5>If <code>&lt;E&gt;</code> is a {@link TableRecord} type (e.g. from a
  * generated record), then its meta data are used:</h5>
@@ -150,6 +143,25 @@ import org.jooq.tools.reflect.ReflectException;
  * {@link Table#fields()}. All target {@link Record#fields()} are looked up in
  * the source table via {@link Table#indexOf(Field)} and their values are
  * mapped. Excess source values and missing target values are ignored.
+ * <p>
+ * <h5>If <code>&lt;E&gt;</code> is a field "value type" and
+ * <code>&lt;R extends Record1&lt;T1&gt;&gt;</code>, i.e. it has exactly one
+ * column:</h5>
+ * <p>
+ * The configured {@link ConverterProvider} is used to look up a
+ * {@link Converter} between <code>T1</code> and <code>E</code>. By default, the
+ * {@link DefaultConverterProvider} is used, which can (among other things):
+ * <ul>
+ * <li>Map between built-in types</li>
+ * <li>Map between {@link Record} types and custom types by delegating to the
+ * {@link Record}'s attached {@link RecordMapperProvider}</li>
+ * <li>Map between {@link JSON} or {@link JSONB} and custom types by delegating
+ * to Jackson or Gson (if found on the classpath)</li>
+ * <li>Map between {@link XML} and custom types by delegating to JAXB (if found
+ * on the classpath)</li>
+ * </ul>
+ * If such a {@link Converter} is found, that one is used to map to
+ * <code>E</code>.
  * <p>
  * <h5>If a default constructor is available and any JPA {@link Column}
  * annotations are found on the provided <code>&lt;E&gt;</code>, only those are
@@ -267,14 +279,6 @@ import org.jooq.tools.reflect.ReflectException;
  * argument types</li>
  * </ul>
  * <p>
- * <h5>If the supplied type is an interface or an abstract class</h5>
- * <p>
- * Abstract types are instantiated using Java reflection {@link Proxy}
- * mechanisms. The returned proxy will wrap a {@link HashMap} containing
- * properties mapped by getters and setters of the supplied type. Methods (even
- * JPA-annotated ones) other than standard POJO getters and setters are not
- * supported. Details can be seen in {@link Reflect#as(Class)}.
- * <p>
  * <h5>Other restrictions</h5>
  * <p>
  * <ul>
@@ -378,33 +382,37 @@ public class DefaultRecordMapper<R extends Record, E> implements RecordMapper<R,
             return;
         }
 
-        if (Stream.class.isAssignableFrom(type)) {
-            delegate = r -> (E) Stream.of(((FieldsImpl<R>) rowType).mapper(configuration, Object[].class).map(r));
-            return;
-        }
+        if (instance == null) {
+            if (Stream.class.isAssignableFrom(type)) {
+                delegate = r -> (E) Stream.of(((FieldsImpl<R>) rowType).mapper(configuration, Object[].class).map(r));
+                return;
+            }
 
-        // [#1470] Return a proxy if the supplied type is an interface
-        // [#10071] [#11148] Primitive types are abstract! They're mapped by a ConverterProvider only later
-        if (Modifier.isAbstract(type.getModifiers()) && !type.isPrimitive()) {
-            delegate = new ProxyMapper();
-            return;
+            // [#1470] Return a proxy if the supplied type is an interface
+            // [#10071] [#11148] Primitive types are abstract! They're mapped by a ConverterProvider only later
+            if (Modifier.isAbstract(type.getModifiers()) && !type.isPrimitive()) {
+                delegate = new ProxyMapper();
+                return;
+            }
         }
 
         // [#2989] [#2836] Records are mapped
         if (AbstractRecord.class.isAssignableFrom(type)) {
-            delegate = (RecordMapper<R, E>) new RecordToRecordMapper();
+            delegate = (RecordMapper<R, E>) new RecordToRecordMapper<>((AbstractRecord) instance);
             return;
         }
 
         // [#10071] Single-field Record1 types can be mapped if there is a ConverterProvider allowing for this mapping
-        if ((debugVTFL = fields.length == 1) && (debugVTCP = Tools.converter(configuration, instance, (Class) fields[0].getType(), type) != null)) {
+        if ((debugVTFL = fields.length == 1) && instance == null && (debugVTCP = Tools.converter(configuration, instance, (Class) fields[0].getType(), type) != null)) {
             delegate = new ValueTypeMapper();
             return;
         }
 
         // [#1340] Allow for using non-public default constructors
         try {
-            MutablePOJOMapper m = new MutablePOJOMapper(new ConstructorCall<>(accessible(type.getDeclaredConstructor())), instance);
+            MutablePOJOMapper m = instance != null
+                ? new MutablePOJOMapper(null, instance)
+                : new MutablePOJOMapper(new ConstructorCall<>(accessible(type.getDeclaredConstructor())), null);
 
             // [#10194] Check if the POJO is really mutable. There might as well
             //          be a no-args constructor for other reasons, e.g. when
@@ -711,68 +719,38 @@ public class DefaultRecordMapper<R extends Record, E> implements RecordMapper<R,
      */
     private class ProxyMapper extends AbstractDelegateMapper<R, E> {
 
-        private Constructor<Lookup>     constructor;
         private final MutablePOJOMapper pojomapper;
 
         ProxyMapper() {
-            this.pojomapper = new MutablePOJOMapper(() -> proxy(), null);
+            this.pojomapper = new MutablePOJOMapper(() -> Reflect.on(new HashMap<>()).as(type), null);
         }
 
         @Override
         public final E map(R record) {
             return pojomapper.map(record);
         }
-
-        private E proxy() {
-            final Object[] result = new Object[1];
-            final Map<String, Object> map = new HashMap<>();
-            final InvocationHandler handler = (proxy, method, args) -> {
-                String name = method.getName();
-
-                int length = (args == null ? 0 : args.length);
-
-                if (length == 0 && name.startsWith("get"))
-                    return map.get(name.substring(3));
-                else if (length == 0 && name.startsWith("is"))
-                    return map.get(name.substring(2));
-                else if (length == 1 && name.startsWith("set"))
-                    map.put(name.substring(3), args[0]);
-
-                // [#5442] Default methods should be invoked to run client implementation
-                else if (method.isDefault())
-                    try {
-                        if (constructor == null)
-                            constructor = accessible(Lookup.class.getDeclaredConstructor(Class.class, int.class));
-
-                        Class<?> declaringClass = method.getDeclaringClass();
-                        return constructor
-                            .newInstance(declaringClass, Lookup.PRIVATE)
-                            .unreflectSpecial(method, declaringClass)
-                            .bindTo(result[0])
-                            .invokeWithArguments(args);
-                    }
-                    catch (Throwable e) {
-                        throw new MappingException("Cannot invoke default method", e);
-                    }
-
-                return null;
-            };
-
-            result[0] = Proxy.newProxyInstance(type.getClassLoader(), new Class[] { type }, handler);
-            return (E) result[0];
-        }
     }
 
     /**
      * Convert a record into another record type.
      */
-    private class RecordToRecordMapper extends AbstractDelegateMapper<R, AbstractRecord> {
+    private class RecordToRecordMapper<E extends AbstractRecord> extends AbstractDelegateMapper<R, AbstractRecord> {
+
+        private final E instance;
+
+        RecordToRecordMapper(E instance) {
+            this.instance = instance;
+        }
 
         @Override
         public final AbstractRecord map(R record) {
             try {
-                if (record instanceof AbstractRecord a)
-                    return a.intoRecord((Class<AbstractRecord>) type);
+                if (record instanceof AbstractRecord a) {
+                    if (instance != null)
+                        return a.intoRecord(instance);
+                    else
+                        return a.intoRecord((Class<AbstractRecord>) type);
+                }
 
                 throw new MappingException("Cannot map record " + record + " to type " + type);
             }

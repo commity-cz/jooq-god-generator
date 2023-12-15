@@ -111,6 +111,7 @@ import java.math.BigInteger;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -491,7 +492,8 @@ public class PostgresDatabase extends AbstractDatabase implements ResultQueryDat
                         .and(PG_CLASS.pgNamespace().NSPNAME.eq(TABLES.TABLE_SCHEMA))
                     .leftJoin(PG_DESCRIPTION)
                         .on(PG_DESCRIPTION.OBJOID.eq(PG_CLASS.OID))
-                        .and(PG_DESCRIPTION.OBJSUBID.eq(0))
+                        .and(PG_DESCRIPTION.CLASSOID.eq(field("'pg_class'::regclass", BIGINT)))
+                        .and(PG_DESCRIPTION.OBJSUBID.eq(inline(0)))
                     .leftJoin(VIEWS)
                         .on(TABLES.TABLE_SCHEMA.eq(VIEWS.TABLE_SCHEMA))
                         .and(TABLES.TABLE_NAME.eq(VIEWS.TABLE_NAME))
@@ -526,7 +528,8 @@ public class PostgresDatabase extends AbstractDatabase implements ResultQueryDat
                     .from(PG_CLASS)
                     .leftOuterJoin(PG_DESCRIPTION)
                         .on(PG_DESCRIPTION.OBJOID.eq(PG_CLASS.OID))
-                        .and(PG_DESCRIPTION.OBJSUBID.eq(0))
+                        .and(PG_DESCRIPTION.CLASSOID.eq(field("'pg_class'::regclass", BIGINT)))
+                        .and(PG_DESCRIPTION.OBJSUBID.eq(inline(0)))
                     .where(PG_CLASS.pgNamespace().NSPNAME.in(getInputSchemata()))
                     .and(PG_CLASS.RELKIND.eq(inline("m"))))
 
@@ -811,7 +814,7 @@ public class PostgresDatabase extends AbstractDatabase implements ResultQueryDat
 
     @Override
     protected List<DomainDefinition> getDomains0() throws SQLException {
-        List<DomainDefinition> result = new ArrayList<>();
+        Map<Name, DefaultDomainDefinition> result = new LinkedHashMap<>();
 
         if (existAll(PG_CONSTRAINT, PG_TYPE)) {
             PgConstraint c = PG_CONSTRAINT.as("c");
@@ -826,6 +829,7 @@ public class PostgresDatabase extends AbstractDatabase implements ResultQueryDat
                         "domain_id",
                         "base_id",
                         "typbasetype",
+                        "conname",
                         "src"
                     )
                     .as(
@@ -833,6 +837,7 @@ public class PostgresDatabase extends AbstractDatabase implements ResultQueryDat
                              d.OID,
                              d.OID,
                              d.TYPBASETYPE,
+                             c.CONNAME,
                              when(c.OID.isNotNull(), array(constraintDef))
                          )
                         .from(d)
@@ -845,6 +850,7 @@ public class PostgresDatabase extends AbstractDatabase implements ResultQueryDat
                              field(name("domains", "domain_id"), Long.class),
                              d.OID,
                              d.TYPBASETYPE,
+                             c.CONNAME,
                              decode()
                                  .when(c.CONBIN.isNull(), src)
                                  .otherwise(arrayAppend(src, constraintDef))
@@ -864,7 +870,12 @@ public class PostgresDatabase extends AbstractDatabase implements ResultQueryDat
 
                         // See https://github.com/postgres/postgres/blob/master/src/backend/catalog/information_schema.sql
                         field("information_schema._pg_char_max_length({0}, {1})", INTEGER, d.TYPBASETYPE, d.TYPTYPMOD).as(DOMAINS.CHARACTER_MAXIMUM_LENGTH),
-                        field("information_schema._pg_numeric_precision({0}, {1})", INTEGER, d.TYPBASETYPE, d.TYPTYPMOD).as(DOMAINS.NUMERIC_PRECISION),
+
+                        // [#15555]
+                        coalesce(
+                            field("information_schema._pg_datetime_precision({0}, {1})", INTEGER, d.TYPBASETYPE, d.TYPTYPMOD),
+                            field("information_schema._pg_numeric_precision({0}, {1})", INTEGER, d.TYPBASETYPE, d.TYPTYPMOD)
+                        ).as(DOMAINS.NUMERIC_PRECISION),
                         field("information_schema._pg_numeric_scale({0}, {1})", INTEGER, d.TYPBASETYPE, d.TYPTYPMOD).as(DOMAINS.NUMERIC_SCALE),
                         src)
                     .from(d)
@@ -875,37 +886,43 @@ public class PostgresDatabase extends AbstractDatabase implements ResultQueryDat
                         .on(field(name("domains", "base_id")).eq(b.OID))
                     .where(d.TYPTYPE.eq("d"))
                     .and(d.pgNamespace().NSPNAME.in(getInputSchemata()))
-                    .orderBy(d.pgNamespace().NSPNAME, d.TYPNAME)
+                    .orderBy(d.pgNamespace().NSPNAME, d.TYPNAME, field(name("domains", "conname")))
             ) {
-                SchemaDefinition schema = getSchema(record.get(d.pgNamespace().NSPNAME));
 
-                DataTypeDefinition baseType = new DefaultDataTypeDefinition(
-                    this,
-                    schema,
-                    record.get(b.TYPNAME),
-                    record.get(DOMAINS.CHARACTER_MAXIMUM_LENGTH),
-                    record.get(DOMAINS.NUMERIC_PRECISION),
-                    record.get(DOMAINS.NUMERIC_SCALE),
-                   !record.get(d.TYPNOTNULL, boolean.class),
-                    record.get(d.TYPDEFAULT),
-                    name(
-                        record.get(d.pgNamespace().NSPNAME),
-                        record.get(b.TYPNAME)
-                    )
-                );
+                String schemaName = record.get(d.pgNamespace().NSPNAME);
+                String domainName = record.get(d.TYPNAME);
+                String[] check = record.get(src);
 
-                DefaultDomainDefinition domain = new DefaultDomainDefinition(
-                    schema,
-                    record.get(d.TYPNAME),
-                    baseType
-                );
+                DefaultDomainDefinition domain = result.computeIfAbsent(name(schemaName, domainName), k -> {
+                    SchemaDefinition schema = getSchema(record.get(d.pgNamespace().NSPNAME));
 
-                domain.addCheckClause(record.get(src));
-                result.add(domain);
+                    DataTypeDefinition baseType = new DefaultDataTypeDefinition(
+                        this,
+                        schema,
+                        record.get(b.TYPNAME),
+                        record.get(DOMAINS.CHARACTER_MAXIMUM_LENGTH),
+                        record.get(DOMAINS.NUMERIC_PRECISION),
+                        record.get(DOMAINS.NUMERIC_SCALE),
+                       !record.get(d.TYPNOTNULL, boolean.class),
+                        record.get(d.TYPDEFAULT),
+                        name(
+                            record.get(d.pgNamespace().NSPNAME),
+                            record.get(b.TYPNAME)
+                        )
+                    );
+
+                    return new DefaultDomainDefinition(
+                        schema,
+                        record.get(d.TYPNAME),
+                        baseType
+                    );
+                });
+
+                domain.addCheckClause(check);
             }
         }
 
-        return result;
+        return new ArrayList<>(result.values());
     }
 
     @Override

@@ -39,6 +39,8 @@ package org.jooq.codegen;
 
 
 import static java.util.Arrays.asList;
+import static java.util.Collections.nCopies;
+import static java.util.Collections.singletonList;
 import static java.util.function.Function.identity;
 import static java.util.stream.Collectors.counting;
 import static java.util.stream.Collectors.groupingBy;
@@ -59,6 +61,7 @@ import static org.jooq.impl.DSL.name;
 import static org.jooq.impl.QOM.GenerationOption.STORED;
 import static org.jooq.impl.QOM.GenerationOption.VIRTUAL;
 import static org.jooq.meta.AbstractTypedElementDefinition.getDataType;
+import static org.jooq.meta.jaxb.VisibilityModifier.PUBLIC;
 import static org.jooq.tools.StringUtils.isBlank;
 
 import java.io.File;
@@ -78,6 +81,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -371,8 +375,15 @@ public class JavaGenerator extends AbstractGenerator {
     private String visibilityPublic() {
         if (scala)
             return "";
+
+        // [#14855] Make sure visibility isn't reduced to anything less than "public"
+        // [#14883] Don't generate explicit "public" unless explicitly requested
         else if (kotlin)
-            return "".equals(visibility()) ? visibility() : "public ";
+            return visibility(
+                generateVisibilityModifier() == VisibilityModifier.PUBLIC
+                ? VisibilityModifier.PUBLIC
+                : VisibilityModifier.DEFAULT
+            );
         else
             return "public ";
     }
@@ -401,6 +412,19 @@ public class JavaGenerator extends AbstractGenerator {
             case DEFAULT:
             default:
                 return scala || kotlin ? "" : "public ";
+        }
+    }
+
+    private boolean visible(VisibilityModifier modifier) {
+        switch (modifier) {
+            case NONE:
+            case PRIVATE:
+                return false;
+            case PUBLIC:
+            case INTERNAL:
+            case DEFAULT:
+            default:
+                return true;
         }
     }
 
@@ -1266,6 +1290,17 @@ public class JavaGenerator extends AbstractGenerator {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
     private void printCreateUniqueKey(JavaWriter out, UniqueKeyDefinition uniqueKey) {
 
 
@@ -1279,13 +1314,27 @@ public class JavaGenerator extends AbstractGenerator {
     }
 
     private void printCreateNonEmbeddableUniqueKey(JavaWriter out, UniqueKeyDefinition uniqueKey) {
+        List<Definition> keyColumns = new ArrayList<>(uniqueKey.getKeyColumns());
+
+
+
+
+
+
+
+
+
+
+
+
+
         if (scala)
             out.print("%s.createUniqueKey(%s, %s.name(\"%s\"), Array([[%s]]).asInstanceOf[Array[%s[%s, _] ] ], %s)",
                 Internal.class,
                 out.ref(getStrategy().getFullJavaIdentifier(uniqueKey.getTable()), 2),
                 DSL.class,
                 escapeString(uniqueKey.getOutputName()),
-                out.ref(getStrategy().getFullJavaIdentifiers(uniqueKey.getKeyColumns()), colRefSegments(null)),
+                out.ref(getStrategy().getFullJavaIdentifiers(keyColumns), colRefSegments(null)),
                 TableField.class,
                 out.ref(getStrategy().getJavaClassName(uniqueKey.getTable(), Mode.RECORD)),
                 uniqueKey.enforced());
@@ -1295,7 +1344,7 @@ public class JavaGenerator extends AbstractGenerator {
                 out.ref(getStrategy().getFullJavaIdentifier(uniqueKey.getTable()), 2),
                 DSL.class,
                 escapeString(uniqueKey.getOutputName()),
-                out.ref(getStrategy().getFullJavaIdentifiers(uniqueKey.getKeyColumns()), colRefSegments(null)),
+                out.ref(getStrategy().getFullJavaIdentifiers(keyColumns), colRefSegments(null)),
                 uniqueKey.enforced());
         else
             out.print("%s.createUniqueKey(%s, %s.name(\"%s\"), new %s[] { [[%s]] }, %s)",
@@ -1304,7 +1353,7 @@ public class JavaGenerator extends AbstractGenerator {
                 DSL.class,
                 escapeString(uniqueKey.getOutputName()),
                 TableField.class,
-                out.ref(getStrategy().getFullJavaIdentifiers(uniqueKey.getKeyColumns()), colRefSegments(null)),
+                out.ref(getStrategy().getFullJavaIdentifiers(keyColumns), colRefSegments(null)),
                 uniqueKey.enforced());
     }
 
@@ -1877,7 +1926,9 @@ public class JavaGenerator extends AbstractGenerator {
                     out.println();
                     printDeprecationIfUnknownType(out, colTypeFull);
                     out.println("%soverride fun value%s(value: %s%s): %s {", visibilityPublic(), i, colType, column instanceof EmbeddableDefinition ? "" : "?", className);
-                    out.println("this.%s = value", colMember);
+
+                    // [#14785] Can't use setter, in case <kotlinNotNullRecordAttributes/> is active
+                    out.println("set(%s, value)", (i - 1));
                     out.println("return this");
                     out.println("}");
                 }
@@ -2102,7 +2153,7 @@ public class JavaGenerator extends AbstractGenerator {
         // There are some edge cases for 0-degree record types, such as Oracle's XMLTYPE
         // While these types shouldn't have any auxiliary constructors accepting individual attributes
         // they can still have a pojoArgument constructor
-        if (pojoArgument || degree > 0 && degree < 256) {
+        if (pojoArgument || degree > 0 && degree < 255) {
             List<String> arguments = new ArrayList<>(degree);
             List<String> properties = new ArrayList<>(degree);
 
@@ -2236,6 +2287,8 @@ public class JavaGenerator extends AbstractGenerator {
                     final boolean isUDT = t.getType(r).isUDT();
                     final boolean isArray = t.getType(r).isArray();
                     final boolean isUDTArray = t.getType(r).isUDTArray();
+                    final ArrayDefinition array = database.getArray(t.getType(r).getSchema(), t.getType(r).getQualifiedUserType());
+                    final String indexTypeFull = array == null || array.getIndexType() == null ? null : getJavaType(array.getIndexType(resolver(out)), out);
                     final boolean isArrayOfUDTs = isArrayOfUDTs(t, r);
 
                     final String udtType = (isUDT || isArray)
@@ -2314,15 +2367,21 @@ public class JavaGenerator extends AbstractGenerator {
                     else {
                         if (pojoArgument) {
                             if (isUDTArray) {
-                                out.println("%s(value.%s() == null ? null : new %s(value.%s().stream().map(%s::new).collect(%s.toList())));",
-                                    getStrategy().getJavaSetterName(column, Mode.RECORD),
-                                    getStrategy().getJavaGetterName(column, Mode.POJO),
-                                    udtType,
-                                    generatePojosAsJavaRecordClasses()
-                                        ? getStrategy().getJavaMemberName(column, Mode.POJO)
-                                        : getStrategy().getJavaGetterName(column, Mode.POJO),
-                                    udtArrayElementType,
-                                    Collectors.class);
+                                if (indexTypeFull == null) {
+                                    out.println("%s(value.%s() == null ? null : new %s(value.%s().stream().map(%s::new).collect(%s.toList())));",
+                                        getStrategy().getJavaSetterName(column, Mode.RECORD),
+                                        getStrategy().getJavaGetterName(column, Mode.POJO),
+                                        udtType,
+                                        generatePojosAsJavaRecordClasses()
+                                            ? getStrategy().getJavaMemberName(column, Mode.POJO)
+                                            : getStrategy().getJavaGetterName(column, Mode.POJO),
+                                        udtArrayElementType,
+                                        Collectors.class);
+                                }
+                                else {
+                                    out.println("if (true)");
+                                    out.println("throw new %s(\"Cannot use POJO constructor for POJO that references Oracle associative array yet. See https://github.com/jOOQ/jOOQ/issues/15108 for details.\");", UnsupportedOperationException.class);
+                                }
                             }
                             else if (isArrayOfUDTs) {
                                 final String columnTypeFull = getJavaType(t.getType(resolver(out, Mode.POJO)), out, Mode.POJO);
@@ -2372,6 +2431,9 @@ public class JavaGenerator extends AbstractGenerator {
                     }
                 }
             }
+
+            // [#14817] [#14727] Make sure the same behaviour as from(Object) is implemented
+            out.println("resetChangedOnNotNull()%s", semicolon);
 
             if (pojoArgument && degree > 0)
                 out.println("}");
@@ -2577,7 +2639,7 @@ public class JavaGenerator extends AbstractGenerator {
         }
         else if (kotlin) {
             out.println();
-            out.println("%sopen %svar %s: %s", visibility(override), (generateInterfaces() ? "override " : ""), member, type);
+            out.println("%sopen %svar %s: %s", visibility(generateInterfaces()), (generateInterfaces() ? "override " : ""), member, type);
             out.tab(1).println("set(value): %s {", setterReturnType);
         }
         else {
@@ -3065,7 +3127,7 @@ public class JavaGenerator extends AbstractGenerator {
 
         printValidationAnnotation(out, column);
         printNullableOrNonnullAnnotation(out, column);
-        if (kotlin)
+        if (kotlin && !generateImmutableInterfaces())
             printKotlinSetterAnnotation(out, column, Mode.INTERFACE);
 
         if (scala)
@@ -3493,6 +3555,8 @@ public class JavaGenerator extends AbstractGenerator {
             final String domainTypeFull = getJavaType(domain.getType(resolver(out)), out);
             final String domainType = out.ref(domainTypeFull);
             final String domainTypeRef = getJavaTypeReference(domain.getDatabase(), domain.getType(resolver(out)), out);
+            final List<String> converter = out.ref(list(domain.getType(resolver(out)).getConverter()));
+            final List<String> binding = out.ref(list(domain.getType(resolver(out)).getBinding()));
 
             out.javadoc("The domain <code>%s</code>.", domain.getQualifiedOutputName());
 
@@ -3501,6 +3565,8 @@ public class JavaGenerator extends AbstractGenerator {
                 out.println("  schema");
                 out.println(", %s.name(\"%s\")", DSL.class, escapeString(domain.getOutputName()));
                 out.println(", %s", domainTypeRef);
+                if (!converter.isEmpty() || !binding.isEmpty())
+                    out.println(converterTemplate(converter) + converterTemplate(binding), converter, binding);
 
                 for (String check : domain.getCheckClauses())
                     out.println(", %s.createCheck(null, null, \"%s\")", Internal.class, escapeString(check));
@@ -3512,6 +3578,8 @@ public class JavaGenerator extends AbstractGenerator {
                 out.println("  schema()");
                 out.println(", %s.name(\"%s\")", DSL.class, escapeString(domain.getOutputName()));
                 out.println(", %s", domainTypeRef);
+                if (!converter.isEmpty() || !binding.isEmpty())
+                    out.println(converterTemplate(converter) + converterTemplate(binding), converter, binding);
 
                 for (String check : domain.getCheckClauses())
                     out.println(", %s.createCheck<%s>(null, null, \"%s\")", Internal.class, Record.class, escapeString(check));
@@ -3519,10 +3587,13 @@ public class JavaGenerator extends AbstractGenerator {
                 out.println(")");
             }
             else {
+                //
                 out.println("%sstatic final %s<%s> %s = %s.createDomain(", visibility(), Domain.class, domainType, id, Internal.class);
                 out.println("  schema()");
                 out.println(", %s.name(\"%s\")", DSL.class, escapeString(domain.getOutputName()));
                 out.println(", %s", domainTypeRef);
+                if (!converter.isEmpty() || !binding.isEmpty())
+                    out.println(converterTemplate(converter) + converterTemplate(binding), converter, binding);
 
                 for (String check : domain.getCheckClauses())
                     out.println(", %s.createCheck(null, null, \"%s\")", Internal.class, escapeString(check));
@@ -3799,7 +3870,7 @@ public class JavaGenerator extends AbstractGenerator {
             out.println("}");
 
             out.println();
-            out.println("sealed trait %s extends %s[[before= with ][%s]] {", className, EnumType.class, interfaces);
+            out.println("sealed trait %s extends %s[[before= with ][separator= with ][%s]] {", className, EnumType.class, interfaces);
 
             if (enumHasNoSchema)
                 out.println("override def getCatalog: %s = null", Catalog.class);
@@ -4874,6 +4945,8 @@ public class JavaGenerator extends AbstractGenerator {
             out.println("}");
 
         List<Definition> embeddablesAndUnreplacedColumns = embeddablesAndUnreplacedColumns(table);
+
+        columnLoop:
         for (Definition column : embeddablesAndUnreplacedColumns) {
             final String colName = column.getOutputName();
             final String colClass = getStrategy().getJavaClassName(column);
@@ -4882,6 +4955,16 @@ public class JavaGenerator extends AbstractGenerator {
             final String colTypeRecord = out.ref(getJavaType(column, out, Mode.RECORD));
             final String colType = out.ref(colTypeFull);
             final String colIdentifier = out.ref(getStrategy().getFullJavaIdentifier(column), colRefSegments(column));
+
+
+
+
+
+
+
+
+
+
 
             // fetchRangeOf[Column]([T]...)
             // -----------------------
@@ -5151,7 +5234,8 @@ public class JavaGenerator extends AbstractGenerator {
                 out.println("%srecord %s(", visibility(), className);
 
                 forEach(getTypedElements(tableUdtOrEmbeddable), (column, separator) -> {
-                    out.println("%s %s%s",
+                    out.println("[[before=@][after= ][%s]]%s %s%s",
+                        list(nullableOrNonnullAnnotation(out, column)),
                         out.ref(getJavaType(column.getType(resolver(out, Mode.POJO)), out, Mode.POJO)),
                         getStrategy().getJavaMemberName(column, Mode.POJO),
                         separator);
@@ -5259,7 +5343,7 @@ public class JavaGenerator extends AbstractGenerator {
         // [#3010] Invalid UDTs may have no attributes. Avoid generating this constructor in that case
         // [#3176] Avoid generating constructors for tables with more than 255 columns (Java's method argument limit)
         else if (getTypedElements(tableOrUDT).size() > 0 &&
-                 getTypedElements(tableOrUDT).size() < 256) {
+                 getTypedElements(tableOrUDT).size() < 255) {
             out.println();
 
             if (generateConstructorPropertiesAnnotationOnPojos())
@@ -5406,6 +5490,7 @@ public class JavaGenerator extends AbstractGenerator {
         final String columnTypeDeclaredFull = getStrategy().getFullJavaClassName(embeddable, generateInterfaces() ? Mode.INTERFACE : Mode.POJO);
         final String columnTypeDeclared = out.ref(columnTypeDeclaredFull);
         final String columnGetter = getStrategy().getJavaGetterName(embeddable, Mode.POJO);
+        final String columnMember = getStrategy().getJavaMemberName(embeddable, Mode.POJO);
         final String name = embeddable.getQualifiedOutputName();
 
         // Getter
@@ -5414,10 +5499,18 @@ public class JavaGenerator extends AbstractGenerator {
 
         printNonnullAnnotation(out);
 
-        if (scala)
+        if (scala) {
             out.println("%sdef %s: %s = new %s(", visibility(generateInterfaces()), scalaWhitespaceSuffix(columnGetter), columnType, columnType);
-        else if (kotlin)
+        }
+        else if (kotlin) {
+
+            // [#14853] The POJO property hasn't been generated in the setter, if the POJO
+            //          is immutable, as there are no setters.
+            if (generateImmutablePojos())
+                generateEmbeddablePojoProperty(out, generateImmutableInterfaces(), generateInterfaces(), columnTypeDeclared, columnMember);
+
             out.tab(1).println("get(): %s = %s(", columnTypeDeclared, columnType);
+        }
         else {
             out.overrideIf(generateInterfaces());
             out.println("%s%s %s() {", visibility(generateInterfaces()), columnType, columnGetter);
@@ -5506,7 +5599,7 @@ public class JavaGenerator extends AbstractGenerator {
             out.println("%sdef %s(value: %s): %s = {", visibility(override), columnSetter, columnType, columnSetterReturnType);
         }
         else if (kotlin) {
-            out.println("%s%svar %s: %s", visibility(override), override ? "override " : "", columnMember, columnType);
+            generateEmbeddablePojoProperty(out, false, override, columnType, columnMember);
             out.tab(1).println("set(value): %s {", columnSetterReturnType);
         }
         else {
@@ -5519,7 +5612,14 @@ public class JavaGenerator extends AbstractGenerator {
                 final String s = getStrategy().getJavaMemberName(column.getReferencingColumn(), Mode.POJO);
                 final String g = getStrategy().getJavaMemberName(column, Mode.POJO);
 
-                out.tab(1).println("%s = value.%s", s, g);
+                out.tab(1).println("%s = value.%s[[before= ?: throw NullPointerException(\"Shared embeddable allows NULL value for column ][after=, but this table does not\")][%s]]",
+                    s, g,
+                    list(kotlinEffectivelyNotNull(out, column.getReferencingColumn(), Mode.POJO) &&
+                        !kotlinEffectivelyNotNull(out, column, Mode.POJO)
+                        ? column.getReferencingColumn().getName()
+                        : null
+                    )
+                );
             }
         }
         else {
@@ -5538,6 +5638,10 @@ public class JavaGenerator extends AbstractGenerator {
             out.tab(1).println("}");
         else
             out.println("}");
+    }
+
+    private void generateEmbeddablePojoProperty(JavaWriter out, boolean immutable, boolean override, String columnType, String columnMember) {
+        out.println("%s%s%s %s: %s", visibility(override), override ? "override " : "", immutable ? "val" : "var", columnMember, columnType);
     }
 
     /**
@@ -5783,11 +5887,11 @@ public class JavaGenerator extends AbstractGenerator {
 
                 if (nn) {
                     if (isObjectArrayType(getJavaType(column.getType(resolver(out)), out)))
-                        out.println("result = prime * result + %s.deepHashCode(this.%s)", columnMember, Arrays.class, columnMember);
+                        out.println("result = prime * result + %s.deepHashCode(this.%s)", Arrays.class, columnMember);
                     else if (isArrayType(getJavaType(column.getType(resolver(out)), out)))
-                        out.println("result = prime * result + %s.hashCode(this.%s)", columnMember, Arrays.class, columnMember);
+                        out.println("result = prime * result + %s.hashCode(this.%s)", Arrays.class, columnMember);
                     else
-                        out.println("result = prime * result + this.%s.hashCode()", columnMember, columnMember);
+                        out.println("result = prime * result + this.%s.hashCode()", columnMember);
                 }
                 else {
                     if (isObjectArrayType(getJavaType(column.getType(resolver(out)), out)))
@@ -6097,14 +6201,21 @@ public class JavaGenerator extends AbstractGenerator {
         }
 
         for (ColumnDefinition column : table.getColumns()) {
-            final String columnTypeFull = getJavaType(column.getType(resolver(out)), out);
+            final DataTypeDefinition columnTypeDef = column.getType(resolver(out));
+            final DomainDefinition domain = schema.getDatabase().getDomain(schema, columnTypeDef.getQualifiedUserType());
+            final String columnTypeFull = getJavaType(columnTypeDef, out);
             final String columnType = out.ref(columnTypeFull);
-            final String columnTypeRef = getJavaTypeReference(column.getDatabase(), column.getType(resolver(out)), out);
+            final String columnTypeRef = getJavaTypeReference(column.getDatabase(), columnTypeDef, out);
             final String columnId = out.ref(getStrategy().getJavaIdentifier(column), colRefSegments(column));
             final String columnName = column.getName();
-            final List<String> converter = out.ref(list(column.getType(resolver(out)).getConverter()));
-            final List<String> binding = out.ref(list(column.getType(resolver(out)).getBinding()));
+            final List<String> converter = new ArrayList<>();
+            final List<String> binding = new ArrayList<>();
             final List<String> generator = new ArrayList<>();
+            // [#14916] Domain types may already have bindings/converters. Don't re-apply them.
+            if (domain == null || !StringUtils.equals(domain.getType(resolver(out)).getConverter(), columnTypeDef.getConverter()))
+                converter.addAll(out.ref(list(columnTypeDef.getConverter())));
+            if (domain == null || !StringUtils.equals(domain.getType(resolver(out)).getBinding(), columnTypeDef.getBinding()))
+                binding.addAll(out.ref(list(columnTypeDef.getBinding())));
 
 
 
@@ -6135,21 +6246,21 @@ public class JavaGenerator extends AbstractGenerator {
                 //         can't be overloaded, so it has that "0" suffix...
                 if (generator.isEmpty())
                     out.println("%sval %s: %s[%s, %s] = createField(%s.name(\"%s\"), %s, \"%s\"" + converterTemplate(converter) + converterTemplate(binding) + converterTemplate(generator) + ")",
-                        columnVisibility, scalaWhitespaceSuffix(columnId), TableField.class, recordType, columnType, DSL.class, columnName, columnTypeRef, escapeString(comment(column)), converter, binding, generator);
+                        columnVisibility, scalaWhitespaceSuffix(columnId), TableField.class, recordType, columnType, DSL.class, escapeString(columnName), columnTypeRef, escapeString(comment(column)), converter, binding, generator);
                 else
                     out.println("%sval %s: %s[%s, %s] = createField0(%s.name(\"%s\"), %s, this, \"%s\"" + converterTemplate(converter) + converterTemplate(binding) + converterTemplate(generator) + ")",
-                        columnVisibility, scalaWhitespaceSuffix(columnId), TableField.class, recordType, columnType, DSL.class, columnName, columnTypeRef, escapeString(comment(column)), converter, binding, generator);
+                        columnVisibility, scalaWhitespaceSuffix(columnId), TableField.class, recordType, columnType, DSL.class, escapeString(columnName), columnTypeRef, escapeString(comment(column)), converter, binding, generator);
             }
             else if (kotlin) {
                 out.println("%sval %s: %s<%s, %s?> = createField(%s.name(\"%s\"), %s, this, \"%s\"" + converterTemplate(converter) + converterTemplate(binding) + converterTemplate(generator) + ")",
-                    columnVisibility, columnId, TableField.class, recordType, columnType, DSL.class, columnName, columnTypeRef, escapeString(comment(column)), converter, binding, generator);
+                    columnVisibility, columnId, TableField.class, recordType, columnType, DSL.class, escapeString(columnName), columnTypeRef, escapeString(comment(column)), converter, binding, generator);
             }
             else {
                 String isStatic = generateInstanceFields() ? "" : "static ";
                 String tableRef = generateInstanceFields() ? "this" : out.ref(getStrategy().getJavaIdentifier(table), 2);
 
                 out.println("%s%sfinal %s<%s, %s> %s = createField(%s.name(\"%s\"), %s, %s, \"%s\"" + converterTemplate(converter) + converterTemplate(binding) + converterTemplate(generator) + ");",
-                    columnVisibility, isStatic, TableField.class, recordType, columnType, columnId, DSL.class, columnName, columnTypeRef, tableRef, escapeString(comment(column)), converter, binding, generator);
+                    columnVisibility, isStatic, TableField.class, recordType, columnType, columnId, DSL.class, escapeString(columnName), columnTypeRef, tableRef, escapeString(comment(column)), converter, binding, generator);
             }
         }
 
@@ -6327,8 +6438,10 @@ public class JavaGenerator extends AbstractGenerator {
         }
 
         if (scala) {
+
+            // [#15760] super.aliased() is necessary in Scala 3
             out.println();
-            out.println("%soverride def getSchema: %s = if (aliased()) null else %s", visibilityPublic(), Schema.class, schemaId);
+            out.println("%soverride def getSchema: %s = if (super.aliased()) null else %s", visibilityPublic(), Schema.class, schemaId);
         }
         else if (kotlin) {
             out.println("%soverride fun getSchema(): %s? = if (aliased()) null else %s", visibilityPublic(), Schema.class, schemaId);
@@ -6956,6 +7069,8 @@ public class JavaGenerator extends AbstractGenerator {
         // [#10481] Use the types from replaced embeddables if applicable
         List<Definition> replacingEmbeddablesAndUnreplacedColumns = replacingEmbeddablesAndUnreplacedColumns(table);
         int degree = replacingEmbeddablesAndUnreplacedColumns.size();
+        int referencedDegree = replacingEmbeddablesAndUnreplacedColumns(table.getReferencedTable()).size();
+
         String rowType = refRowType(out, replacingEmbeddablesAndUnreplacedColumns);
         String rowTypeContravariantJava = refRowType(out, replacingEmbeddablesAndUnreplacedColumns, s -> "? super " + s);
 
@@ -7009,7 +7124,8 @@ public class JavaGenerator extends AbstractGenerator {
                             out.println("%s.value(%s, %s" + converterTemplateForTableValuedFunction(converter) + converterTemplateForTableValuedFunction(binding) + ")%s", DSL.class, paramArgName, paramTypeRef, converter, binding, separator);
                     });
 
-                    out.println("))).map(r => if (aliased()) r.as(getUnqualifiedName) else r).get");
+                    // [#15760] super.aliased() is necessary in Scala 3
+                    out.println("))).map(r => if (super.aliased()) r.as(getUnqualifiedName) else r).get");
                 }
                 else if (kotlin) {
                     out.print("%sfun call(", visibility()).printlnIf(!parameters.isEmpty());
@@ -7057,12 +7173,22 @@ public class JavaGenerator extends AbstractGenerator {
             }
         }
 
-        if (generateRecordsImplementingRecordN() && degree > 0 && degree <= Constants.MAX_ROW_DEGREE) {
+        if (generateRecordsImplementingRecordN()
+            && degree > 0
+            && degree <= Constants.MAX_ROW_DEGREE
+
+            // [#5405] [#14830] A table valued function might have a degree that
+            //                  is different from the base table's Record type!
+            && degree == referencedDegree
+        ) {
             out.javadoc("Convenience mapping calling {@link %s#convertFrom(%s)}.", SelectField.class, Function.class);
 
             if (scala) {
-                out.println("%sdef mapping[U](from: (" + rowType + ") => U): %s[U] = convertFrom(r => from.apply(" + rangeClosed(1, degree).mapToObj(i -> "r.value" + i + "()").collect(joining(", ")) + "))",
-                    visibility(), SelectField.class);
+
+                // [#15760] Scala 3 has a type inference regression here, which is why we have to hint
+                //          the lambda's r parameter type.
+                out.println("%sdef mapping[U](from: (" + rowType + ") => U): %s[U] = convertFrom((r: %s[" + rowType + "]) => from.apply(" + rangeClosed(1, degree).mapToObj(i -> "r.value" + i + "()").collect(joining(", ")) + "))",
+                    visibility(), SelectField.class, out.ref("org.jooq.Record" + degree));
             }
             else if (kotlin) {
                 out.println("%sfun <U> mapping(from: (" + rowType + ") -> U): %s<U> = convertFrom(%s.mapping(from))",
@@ -7078,8 +7204,11 @@ public class JavaGenerator extends AbstractGenerator {
             out.javadoc("Convenience mapping calling {@link %s#convertFrom(%s, %s)}.", SelectField.class, Class.class, Function.class);
 
             if (scala) {
-                out.println("%sdef mapping[U](toType: %s[U], from: (" + rowType + ") => U): %s[U] = convertFrom(toType,r => from.apply(" + rangeClosed(1, degree).mapToObj(i -> "r.value" + i + "()").collect(joining(", ")) + "))",
-                    visibility(), Class.class, SelectField.class);
+
+                // [#15760] Scala 3 has a type inference regression here, which is why we have to hint
+                //          the lambda's r parameter type.
+                out.println("%sdef mapping[U](toType: %s[U], from: (" + rowType + ") => U): %s[U] = convertFrom(toType, (r: %s[" + rowType + "]) => from.apply(" + rangeClosed(1, degree).mapToObj(i -> "r.value" + i + "()").collect(joining(", ")) + "))",
+                    visibility(), Class.class, SelectField.class, out.ref("org.jooq.Record" + degree));
             }
             else if (kotlin) {
                 out.println("%sfun <U> mapping(toType: %s<U>, from: (" + rowType + ") -> U): %s<U> = convertFrom(toType, %s.mapping(from))",
@@ -7806,7 +7935,7 @@ public class JavaGenerator extends AbstractGenerator {
             if (scala)
                 out.println("%s(from.%s)", setter, getter);
             else if (kotlin)
-                out.println("%s = from.%s", member, member);
+                out.println("this.%s = from.%s", member, member);
             else
                 out.println("%s(from.%s());", setter, getter);
         }
@@ -8177,13 +8306,12 @@ public class JavaGenerator extends AbstractGenerator {
     }
 
     private boolean kotlinEffectivelyNotNull(JavaWriter out, TypedElementDefinition<?> typed, Mode mode) {
-        if (mode == Mode.POJO && generateKotlinNotNullPojoAttributes() ||
+        return (
+            mode == Mode.POJO && generateKotlinNotNullPojoAttributes() ||
             mode == Mode.RECORD && generateKotlinNotNullRecordAttributes() ||
             mode == Mode.INTERFACE && generateKotlinNotNullInterfaceAttributes() ||
-            mode == Mode.DEFAULT)
-            return effectivelyNotNull(out, typed) ? true : false;
-        else
-            return false;
+            mode == Mode.DEFAULT
+        ) && effectivelyNotNull(out, typed);
     }
 
     private boolean effectivelyNotNull(JavaWriter out, TypedElementDefinition<?> column) {
@@ -8205,7 +8333,9 @@ public class JavaGenerator extends AbstractGenerator {
         if (kotlin
                 && generateKotlinSetterJvmNameAnnotationsOnIsPrefix()
                 && column instanceof ColumnDefinition
-                && P_IS.matcher(getStrategy().getJavaMemberName(column, mode)).matches()) {
+
+                // TODO: The Mode should be INTERFACE
+                && P_IS.matcher(getStrategy().getJavaMemberName(column, Mode.POJO)).matches()) {
 
             // [#12440] And if we have interfaces, we'll run into https://youtrack.jetbrains.com/issue/KT-31420
             // [#13467] Since jOOQ 3.17, all these properties are open, so this applies everywhere
@@ -9252,6 +9382,8 @@ public class JavaGenerator extends AbstractGenerator {
         if (scala) {}
         else if (kotlin)
             out.println("@Suppress(\"UNCHECKED_CAST\")");
+        else if (Internal.javaVersion() >= 21)
+            out.println("@%s({ \"all\", \"unchecked\", \"rawtypes\", \"this-escape\" })", out.ref("java.lang.SuppressWarnings"));
         else
             out.println("@%s({ \"all\", \"unchecked\", \"rawtypes\" })", out.ref("java.lang.SuppressWarnings"));
     }
@@ -9599,7 +9731,7 @@ public class JavaGenerator extends AbstractGenerator {
 
         // Check for DOMAIN types
         else if (db.getDomain(schema, u) != null) {
-            type = getJavaType(db.getDomain(schema, u).getDefinedType(), out);
+            type = getJavaType(db.getDomain(schema, u).getType(resolver(out)), out);
         }
 
         // Check for ENUM types

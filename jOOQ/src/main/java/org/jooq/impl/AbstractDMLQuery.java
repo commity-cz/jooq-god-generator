@@ -57,6 +57,8 @@ import static org.jooq.SQLDialect.IGNITE;
 // ...
 import static org.jooq.SQLDialect.MARIADB;
 // ...
+// ...
+// ...
 import static org.jooq.SQLDialect.MYSQL;
 // ...
 // ...
@@ -179,9 +181,9 @@ abstract class AbstractDMLQuery<R extends Record> extends AbstractRowCountQuery 
     private static final JooqLogger              log                                    = JooqLogger.getLogger(AbstractQuery.class);
 
     private static final Set<SQLDialect>         NO_SUPPORT_INSERT_ALIASED_TABLE        = SQLDialect.supportedBy(DERBY, FIREBIRD, H2, MARIADB, MYSQL);
-    private static final Set<SQLDialect>         NO_NATIVE_SUPPORT_INSERT_RETURNING     = SQLDialect.supportedBy(CUBRID, DERBY, H2, HSQLDB, IGNITE, MYSQL, SQLITE);
-    private static final Set<SQLDialect>         NO_NATIVE_SUPPORT_UPDATE_RETURNING     = SQLDialect.supportedBy(CUBRID, DERBY, H2, HSQLDB, IGNITE, MYSQL, SQLITE);
-    private static final Set<SQLDialect>         NO_NATIVE_SUPPORT_DELETE_RETURNING     = SQLDialect.supportedBy(CUBRID, DERBY, H2, HSQLDB, IGNITE, MYSQL, SQLITE);
+    private static final Set<SQLDialect>         NO_NATIVE_SUPPORT_INSERT_RETURNING     = SQLDialect.supportedUntil(CUBRID, DERBY, H2, HSQLDB, IGNITE, MYSQL, SQLITE);
+    private static final Set<SQLDialect>         NO_NATIVE_SUPPORT_UPDATE_RETURNING     = SQLDialect.supportedUntil(CUBRID, DERBY, H2, HSQLDB, IGNITE, MYSQL, SQLITE);
+    private static final Set<SQLDialect>         NO_NATIVE_SUPPORT_DELETE_RETURNING     = SQLDialect.supportedUntil(CUBRID, DERBY, H2, HSQLDB, IGNITE, MYSQL, SQLITE);
     private static final Set<SQLDialect>         NATIVE_SUPPORT_DATA_CHANGE_DELTA_TABLE = SQLDialect.supportedBy(H2);
     private static final Set<SQLDialect>         NO_SUPPORT_FETCHING_KEYS               = SQLDialect.supportedBy(IGNITE);
     private static final Set<SQLDialect>         NO_SUPPORT_RETURNING_ASTERISK          = SQLDialect.supportedUntil(MARIADB);
@@ -1364,7 +1366,9 @@ abstract class AbstractDMLQuery<R extends Record> extends AbstractRowCountQuery 
                                         .from(table)
 
                                         // [#5050] [#9946] Table.getIdentity() doesn't produce aliased fields yet
-                                        .where(table.field(returnIdentity).in(ids))
+                                        // [#14771] A plain SQL table doesn't list its fields, but that isn't necessary
+                                        //          if users provide the correct identity column.
+                                        .where(defaultIfNull(table.field(returnIdentity), returnIdentity).in(ids))
                                         .fetch();
 
                     returnedResult.attach(originalConfiguration);

@@ -41,11 +41,11 @@ import org.jooq.Clause;
 import org.jooq.Context;
 import org.jooq.Field;
 import org.jooq.Name;
+import org.jooq.QualifiedAsterisk;
 import org.jooq.Query;
-import org.jooq.Record;
 import org.jooq.Table;
-import org.jooq.TableField;
 import org.jooq.impl.QOM.UProxy;
+import org.jooq.impl.QOM.UnmodifiableList;
 
 /**
  * A {@link Field} that acts as another field, allowing for the proxied field to
@@ -53,45 +53,38 @@ import org.jooq.impl.QOM.UProxy;
  *
  * @author Lukas Eder
  */
-@SuppressWarnings("unchecked")
-final class FieldProxy<T>
+final class QualifiedAsteriskProxy
 extends
-    AbstractField<T>
+    AbstractQueryPart
 implements
-    TableField<Record, T>,
-    UProxy<Field<T>>,
+    QualifiedAsterisk,
+    UProxy<QualifiedAsterisk>,
     ScopeMappable
 {
 
     /**
-     * The resolved field after a successful meta lookup.
+     * The resolved expression after a successful meta lookup.
      */
-    private AbstractField<T> delegate;
+    private QualifiedAsteriskImpl delegate;
 
     /**
-     * The position in the parsed SQL string where this field proxy was
-     * encountered.
+     * The position in the parsed SQL string where this qualified asterisk proxy
+     * was encountered.
      */
-    private final int        position;
+    private final int             position;
 
     /**
-     * The scope owner that produced this field proxy.
+     * The scope owner that produced this qualified asterisk proxy.
      */
-    Query                    scopeOwner;
+    Query                         scopeOwner;
 
     /**
-     * Whether this FieldProxy could be resolved at some scope level.
+     * Whether this qualified asterisk proxy could be resolved at some scope
+     * level.
      */
-    boolean                  resolved;
+    boolean                       resolved;
 
-    FieldProxy(AbstractField<T> delegate, int position) {
-        super(
-            delegate.getQualifiedName(),
-            new DataTypeProxy<>((AbstractDataType<T>) delegate.getDataType()),
-            delegate.getCommentPart(),
-            delegate.getBinding()
-        );
-
+    QualifiedAsteriskProxy(QualifiedAsteriskImpl delegate, int position) {
         this.delegate = delegate;
         this.position = position;
     }
@@ -100,14 +93,12 @@ implements
         return position;
     }
 
-    final void delegate(AbstractField<T> newDelegate) {
+    final void delegate(QualifiedAsteriskImpl newDelegate) {
         resolve();
         this.delegate = newDelegate;
-
-        ((DataTypeProxy<T>) getDataType()).type((AbstractDataType<T>) newDelegate.getDataType());
     }
 
-    final FieldProxy<T> resolve() {
+    final QualifiedAsteriskProxy resolve() {
         this.resolved = true;
         this.scopeOwner = null;
 
@@ -117,11 +108,6 @@ implements
     final void scopeOwner(Query query) {
         if (!resolved && scopeOwner == null)
             scopeOwner = query;
-    }
-
-    @Override
-    public final Name getQualifiedName() {
-        return delegate.getQualifiedName();
     }
 
     @Override
@@ -179,9 +165,28 @@ implements
         return delegate.toString();
     }
 
+    // -------------------------------------------------------------------------
+    // XXX: DSL API
+    // -------------------------------------------------------------------------
+
     @Override
-    public final Table<Record> getTable() {
-        return delegate instanceof TableField ? ((TableField<Record, ?>) delegate).getTable() : null;
+    public final Table<?> qualifier() {
+        return delegate.qualifier();
+    }
+
+    @Override
+    public final QualifiedAsterisk except(String... fieldNames) {
+        return new QualifiedAsteriskProxy((QualifiedAsteriskImpl) delegate.except(fieldNames), position);
+    }
+
+    @Override
+    public final QualifiedAsterisk except(Name... fieldNames) {
+        return new QualifiedAsteriskProxy((QualifiedAsteriskImpl) delegate.except(fieldNames), position);
+    }
+
+    @Override
+    public final QualifiedAsterisk except(Field<?>... fields) {
+        return new QualifiedAsteriskProxy((QualifiedAsteriskImpl) delegate.except(fields), position);
     }
 
     // -------------------------------------------------------------------------
@@ -189,7 +194,17 @@ implements
     // -------------------------------------------------------------------------
 
     @Override
-    public final Field<T> $delegate() {
+    public final QualifiedAsterisk $delegate() {
         return delegate;
+    }
+
+    @Override
+    public final Table<?> $table() {
+        return delegate.$table();
+    }
+
+    @Override
+    public final UnmodifiableList<? extends Field<?>> $except() {
+        return delegate.$except();
     }
 }

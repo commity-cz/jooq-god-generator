@@ -82,6 +82,7 @@ import java.util.function.Function;
 
 import org.jooq.conf.Settings;
 import org.jooq.impl.DSL;
+import org.jooq.impl.SQLDataType;
 import org.jooq.types.Interval;
 // ...
 
@@ -343,6 +344,13 @@ extends
      * The actual cast may not be accurate as the {@link DataType} has to be
      * "guessed" from the jOOQ-configured data types. Use
      * {@link #cast(DataType)} for more accurate casts.
+     * <p>
+     * <b>NOTE [#15286]</b>: It is strongly recommended to pass only
+     * {@link Class} references of types supported by jOOQ internally, i.e.
+     * types from {@link SQLDataType}. If you're using any custom data types by
+     * means of a {@link Converter} or {@link Binding}, it's better to pass that
+     * converted {@link DataType} reference explicitly to
+     * {@link #cast(DataType)}.
      *
      * @param <Z> The generic type of the cast field
      * @param type The type that is used for the cast
@@ -441,6 +449,13 @@ extends
      * // after casting it to VARCHAR in the database
      * BOOK.ID.cast(String.class);
      * </code></pre>
+     * <p>
+     * <b>NOTE [#15286]</b>: It is strongly recommended to pass only
+     * {@link Class} references of types supported by jOOQ internally, i.e.
+     * types from {@link SQLDataType}. If you're using any custom data types by
+     * means of a {@link Converter} or {@link Binding}, it's better to pass that
+     * converted {@link DataType} reference explicitly to
+     * {@link #coerce(DataType)}.
      *
      * @param <Z> The generic type of the coerced field
      * @param type The type that is used for the coercion
@@ -1005,9 +1020,9 @@ extends
      * Create a condition to case-insensitively pattern-check this field against
      * a value.
      * <p>
-     * This translates to <code>this not ilike value</code> in
+     * This translates to <code>this ilike value</code> in
      * {@link SQLDialect#POSTGRES}, or to
-     * <code>lower(this) not like lower(value)</code> in all other dialects.
+     * <code>lower(this) like lower(value)</code> in all other dialects.
      *
      * @param pattern is wrapped as {@link #val(Object)}.
      */
@@ -1021,9 +1036,9 @@ extends
      * Create a condition to case-insensitively pattern-check this field against
      * a value.
      * <p>
-     * This translates to <code>this not ilike value</code> in
+     * This translates to <code>this ilike value</code> in
      * {@link SQLDialect#POSTGRES}, or to
-     * <code>lower(this) not like lower(value)</code> in all other dialects.
+     * <code>lower(this) like lower(value)</code> in all other dialects.
      */
     @NotNull
     @Support
@@ -1187,21 +1202,21 @@ extends
      * @param pattern is wrapped as {@link #val(Object)}.
      */
     @NotNull
-    @Support
+    @Support({ CUBRID, FIREBIRD, IGNITE, POSTGRES, YUGABYTEDB })
     LikeEscapeStep notSimilarTo(@Stringly.Param String pattern);
 
     /**
      * The <code>NOT_SIMILAR_TO</code> operator.
      */
     @NotNull
-    @Support
+    @Support({ CUBRID, FIREBIRD, IGNITE, POSTGRES, YUGABYTEDB })
     LikeEscapeStep notSimilarTo(Field<String> pattern);
 
     /**
      * The <code>NOT_SIMILAR_TO</code> operator.
      */
     @NotNull
-    @Support
+    @Support({ CUBRID, FIREBIRD, IGNITE, POSTGRES, YUGABYTEDB })
     LikeEscapeStep notSimilarTo(org.jooq.QuantifiedSelect<? extends Record1<String>> pattern);
 
     /**
@@ -1210,21 +1225,21 @@ extends
      * @param pattern is wrapped as {@link #val(Object)}.
      */
     @NotNull
-    @Support
+    @Support({ CUBRID, FIREBIRD, IGNITE, POSTGRES, YUGABYTEDB })
     LikeEscapeStep similarTo(@Stringly.Param String pattern);
 
     /**
      * The <code>SIMILAR_TO</code> operator.
      */
     @NotNull
-    @Support
+    @Support({ CUBRID, FIREBIRD, IGNITE, POSTGRES, YUGABYTEDB })
     LikeEscapeStep similarTo(Field<String> pattern);
 
     /**
      * The <code>SIMILAR_TO</code> operator.
      */
     @NotNull
-    @Support
+    @Support({ CUBRID, FIREBIRD, IGNITE, POSTGRES, YUGABYTEDB })
     LikeEscapeStep similarTo(org.jooq.QuantifiedSelect<? extends Record1<String>> pattern);
 
     // -------------------------------------------------------------------------
@@ -1575,7 +1590,7 @@ extends
      * This translates to
      * <code>this ilike ('%' || escape(value, '\') || '%') escape '\'</code> in
      * {@link SQLDialect#POSTGRES}, or to
-     * <code>lower(this) not like lower(('%' || escape(value, '\') || '%') escape '\')</code>
+     * <code>lower(this) like lower(('%' || escape(value, '\') || '%') escape '\')</code>
      * in all other dialects.
      *
      * @param content is wrapped as {@link #val(Object)}.
@@ -1593,7 +1608,7 @@ extends
      * This translates to
      * <code>this ilike ('%' || escape(value, '\') || '%') escape '\'</code> in
      * {@link SQLDialect#POSTGRES}, or to
-     * <code>lower(this) not like lower(('%' || escape(value, '\') || '%') escape '\')</code>
+     * <code>lower(this) like lower(('%' || escape(value, '\') || '%') escape '\')</code>
      * in all other dialects.
      */
     @NotNull

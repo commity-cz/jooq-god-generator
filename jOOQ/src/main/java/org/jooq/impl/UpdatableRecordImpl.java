@@ -59,11 +59,13 @@ import static org.jooq.impl.RecordDelegate.RecordLifecycleType.REFRESH;
 import static org.jooq.impl.RecordDelegate.RecordLifecycleType.STORE;
 import static org.jooq.impl.RecordDelegate.RecordLifecycleType.UPDATE;
 import static org.jooq.impl.Tools.EMPTY_FIELD;
+import static org.jooq.impl.Tools.EMPTY_TABLE_FIELD;
 import static org.jooq.impl.Tools.settings;
 
 import java.math.BigInteger;
 import java.sql.Timestamp;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -86,6 +88,7 @@ import org.jooq.UpdatableRecord;
 import org.jooq.conf.UpdateUnchangedRecords;
 import org.jooq.exception.DataChangedException;
 import org.jooq.exception.NoDataFoundException;
+import org.jooq.impl.BatchCRUD.QueryCollectorSignal;
 import org.jooq.tools.JooqLogger;
 import org.jooq.tools.StringUtils;
 
@@ -132,7 +135,10 @@ public class UpdatableRecordImpl<R extends UpdatableRecord<R>> extends TableReco
 
     @Override
     final UniqueKey<R> getPrimaryKey() {
-        return getTable().getPrimaryKey();
+        if (getTable() instanceof AbstractTable<R> t)
+            return t.getPrimaryKeyWithEmbeddables();
+        else
+            return getTable().getPrimaryKey();
     }
 
     @Override
@@ -351,18 +357,27 @@ public class UpdatableRecordImpl<R extends UpdatableRecord<R>> extends TableReco
             ? null
             : setReturningIfNeeded(query);
 
-        int result = query.execute();
-        checkIfChanged(result, version, timestamp);
+        try {
+            int result = query.execute();
+            checkIfChanged(result, version, timestamp);
 
-        if (result > 0) {
-            for (Field<?> changedField : changedFields)
-                changed(changedField, false);
+            if (result > 0) {
+                for (Field<?> changedField : changedFields)
+                    changed(changedField, false);
 
-            // [#1859] If an update was successful try fetching the generated
-            getReturningIfNeeded(query, key);
+                // [#1859] If an update was successful try fetching the generated
+                getReturningIfNeeded(query, key);
+            }
+
+            return result;
         }
 
-        return result;
+        // [#8283] Pass optimistic locking information on to BatchCRUD, if applicable
+        catch (QueryCollectorSignal e) {
+            e.version = version;
+            e.timestamp = timestamp;
+            throw e;
+        }
     }
 
     @Override
@@ -504,7 +519,10 @@ public class UpdatableRecordImpl<R extends UpdatableRecord<R>> extends TableReco
             Object thatObject = record.original(field);
 
             if (!StringUtils.equals(thisObject, thatObject))
-                throw new DataChangedException("Database record has been changed");
+                if (thisObject == null && !fetched)
+                    throw new DataChangedException("Cannot detect whether unversioned record has been changed. Either make sure the record is fetched from the database, or use a version or timestamp column to version the record.");
+                else
+                    throw new DataChangedException("Database record has been changed");
         }
     }
 

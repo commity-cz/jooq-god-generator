@@ -6,7 +6,7 @@
 
     <groupId>org.jooq</groupId>
     <artifactId>jooq-parent</artifactId>
-    <version>3.18.0-SNAPSHOT</version>
+    <version>3.18.8-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>jOOQ Parent</name>
@@ -19,6 +19,8 @@
     <url>http://www.jooq.org</url>
 
     <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
         <!-- These in-memory DBs are used by jOOQ-meta-extensions and a variety of integration tests -->
         <h2.version>2.1.214</h2.version>
@@ -43,6 +45,7 @@
 
         <!-- Scala versions -->
         <scala.version>2.13.9</scala.version>
+        <scala3.version>3.3.1</scala3.version>
 
         <!-- Kotlin versions -->
         <kotlin.version>1.8.0</kotlin.version>
@@ -54,11 +57,11 @@
         <!-- Examples and/or extension modules use these dependencies -->
         <hibernate.version>5.6.15.Final</hibernate.version>
         <liquibase.version>4.17.2</liquibase.version>
-        <spring.version>5.3.20</spring.version>
+        <spring.version>5.3.27</spring.version>
         <spring.boot.version>2.6.1</spring.boot.version>
         <!-- [#12884] TODO: Remove explicit upgrade of protobuf-java again when https://github.com/google/error-prone/pull/2819 is released  -->
         <errorprone.version>2.11.0</errorprone.version>
-        <testcontainers.version>1.17.6</testcontainers.version>
+        <testcontainers.version>1.18.1</testcontainers.version>
         <jackson.version>2.14.2</jackson.version>
         <jackson.version.databind>2.14.2</jackson.version.databind>
     </properties>
@@ -392,6 +395,12 @@
                 <version>3.0.8</version>
                 <scope>test</scope>
             </dependency>
+            <dependency>
+                <groupId>org.scalatest</groupId>
+                <artifactId>scalatest_3</artifactId>
+                <version>3.2.14</version>
+                <scope>test</scope>
+            </dependency>
 
             <!-- Some projects will need an H2 database for testing, or to create temporary in-memory databases -->
             <dependency>
@@ -452,6 +461,11 @@
             <dependency>
                 <groupId>org.testcontainers</groupId>
                 <artifactId>postgresql</artifactId>
+                <version>${testcontainers.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>yugabytedb</artifactId>
                 <version>${testcontainers.version}</version>
             </dependency>
             <dependency>
@@ -669,6 +683,8 @@
                         <encoding>UTF-8</encoding>
                         <show>protected</show>
                         <notree>true</notree>
+                        <!-- Explicit configuration of javadoc language to avoid defaulting to build system's configuration -->
+                        <locale>en</locale>
 
                         <!-- Avoid running into Java 8's very restrictive doclint issues -->
                         <additionalparam>-Xdoclint:none</additionalparam>

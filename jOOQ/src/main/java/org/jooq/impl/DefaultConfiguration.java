@@ -93,6 +93,7 @@ import org.jooq.VisitListenerProvider;
 import org.jooq.conf.Settings;
 import org.jooq.conf.SettingsTools;
 import org.jooq.exception.ConfigurationException;
+import org.jooq.impl.DefaultConnectionFactory.NonClosingConnection;
 import org.jooq.impl.DefaultExecuteContext.ExecuteContextConnectionProvider;
 import org.jooq.impl.ThreadLocalTransactionProvider.ThreadLocalConnectionProvider;
 import org.jooq.migrations.xml.jaxb.MigrationsType;
@@ -171,7 +172,7 @@ public class DefaultConfiguration extends AbstractConfiguration {
         this(
             null,
             dialect,
-            SettingsTools.defaultSettings()
+            null
         );
     }
 
@@ -2016,8 +2017,12 @@ public class DefaultConfiguration extends AbstractConfiguration {
     @Override
     public String toString() {
         return "DefaultConfiguration " +
-            "[\n\tconnected=" + (connectionProvider != null && !(connectionProvider instanceof NoConnectionProvider)) +
-            ",\n\ttransactional=" + (transactionProvider != null && !(transactionProvider instanceof NoTransactionProvider)) +
+            "[\n\tconnected=" + (
+                connectionProvider != null && !(connectionProvider instanceof NoConnectionProvider)
+             || connectionFactory != null && !(connectionFactory instanceof NoConnectionFactory)) +
+            ",\n\ttransactional=" + (
+                transactionProvider != null && !(transactionProvider instanceof NoTransactionProvider)
+             || connectionFactory instanceof DefaultConnectionFactory && ((DefaultConnectionFactory) connectionFactory).connection instanceof NonClosingConnection) +
             ",\n\tdialect=" + dialect +
             ",\n\tdata=" + data +
             ",\n\tsettings=\n\t\t" + settings +
@@ -2032,31 +2037,14 @@ public class DefaultConfiguration extends AbstractConfiguration {
         oos.defaultWriteObject();
 
         // Allow these objects to be non-serializable
-        oos.writeObject(connectionProvider instanceof Serializable
-            ? connectionProvider
-            : null);
-        oos.writeObject(interpreterConnectionProvider instanceof Serializable
-            ? interpreterConnectionProvider
-            : null);
-        oos.writeObject(systemConnectionProvider instanceof Serializable
-            ? systemConnectionProvider
-            : null);
-        oos.writeObject(metaProvider instanceof Serializable
-            ? metaProvider
-            : null);
-        oos.writeObject(commitProvider instanceof Serializable
-            ? commitProvider
-            : null);
-        oos.writeObject(transactionProvider instanceof Serializable
-            ? transactionProvider
-            : null);
-        oos.writeObject(recordMapperProvider instanceof Serializable
-            ? recordMapperProvider
-            : null);
-        oos.writeObject(recordUnmapperProvider instanceof Serializable
-            ? recordUnmapperProvider
-            : null);
-
+        oos.writeObject(serializableOrNull(connectionProvider));
+        oos.writeObject(serializableOrNull(interpreterConnectionProvider));
+        oos.writeObject(serializableOrNull(systemConnectionProvider));
+        oos.writeObject(serializableOrNull(metaProvider));
+        oos.writeObject(serializableOrNull(commitProvider));
+        oos.writeObject(serializableOrNull(transactionProvider));
+        oos.writeObject(serializableOrNull(recordMapperProvider));
+        oos.writeObject(serializableOrNull(recordUnmapperProvider));
         oos.writeObject(cloneSerializables(executeListenerProviders));
         oos.writeObject(cloneSerializables(recordListenerProviders));
         oos.writeObject(cloneSerializables(visitListenerProviders));
@@ -2066,21 +2054,11 @@ public class DefaultConfiguration extends AbstractConfiguration {
 
 
 
-        oos.writeObject(unwrapperProvider instanceof Serializable
-            ? unwrapperProvider
-            : null);
 
-        oos.writeObject(charsetProvider instanceof Serializable
-            ? charsetProvider
-            : null);
-
-        oos.writeObject(converterProvider instanceof Serializable
-            ? converterProvider
-            : null);
-
-        oos.writeObject(formattingProvider instanceof Serializable
-            ? formattingProvider
-            : null);
+        oos.writeObject(serializableOrNull(unwrapperProvider));
+        oos.writeObject(serializableOrNull(charsetProvider));
+        oos.writeObject(serializableOrNull(converterProvider));
+        oos.writeObject(serializableOrNull(formattingProvider));
 
         // [#7062] Exclude reflection cache from serialisation
         for (Entry<Object, Object> entry : data.entrySet()) {
@@ -2097,7 +2075,11 @@ public class DefaultConfiguration extends AbstractConfiguration {
 
     private static final String END_OF_MAP_MARKER = "EOM";
 
-    private <E> E[] cloneSerializables(E[] array) {
+    private final Serializable serializableOrNull(Object o) {
+        return o instanceof Serializable s ? s : null;
+    }
+
+    private final <E> E[] cloneSerializables(E[] array) {
         E[] clone = array.clone();
 
         for (int i = 0; i < clone.length; i++)
@@ -2123,6 +2105,8 @@ public class DefaultConfiguration extends AbstractConfiguration {
         visitListenerProviders = (VisitListenerProvider[]) ois.readObject();
         transactionListenerProviders = (TransactionListenerProvider[]) ois.readObject();
         diagnosticsListenerProviders = (DiagnosticsListenerProvider[]) ois.readObject();
+
+
 
 
 

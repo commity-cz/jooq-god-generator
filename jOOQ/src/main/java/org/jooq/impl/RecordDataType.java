@@ -73,9 +73,15 @@ final class RecordDataType<R extends Record> extends DefaultDataType<R> {
 
     @SuppressWarnings("unchecked")
     RecordDataType(Row row, Class<R> recordType, String name) {
-        super(null, recordType, name, name);
+        super(null, recordType, name, nullability(row));
 
         this.row = (AbstractRow<R>) row;
+    }
+
+    static final Nullability nullability(Row row) {
+        return Tools.anyMatch(row.fields(), f -> f.getDataType().nullable())
+             ? Nullability.NULL
+             : Nullability.NOT_NULL;
     }
 
     /**
@@ -156,7 +162,7 @@ final class RecordDataType<R extends Record> extends DefaultDataType<R> {
 
         // [#12116] TODO: Move this logic into JSONReader to make it more generally useful
         else if (object instanceof Record || object instanceof Map || object instanceof List) {
-            return newRecord(true, getRecordType(), row, CONFIG)
+            return newRecord(true, getRecordType(), row, CONFIG.get())
                 .operate(r -> {
 
                     // [#12014] TODO: Fix this and remove workaround

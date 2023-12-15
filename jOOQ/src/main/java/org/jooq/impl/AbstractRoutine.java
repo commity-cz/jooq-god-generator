@@ -575,7 +575,7 @@ implements
                 ctx.statement().setQueryTimeout(t);
 
             listener.bindStart(ctx);
-            using(configuration).bindContext(ctx.statement()).visit(this);
+            new DefaultBindContext(configuration, ctx, ctx.statement()).visit(this);
             registerOutParameters(ctx);
             listener.bindEnd(ctx);
 
@@ -1012,12 +1012,6 @@ implements
 
 
 
-
-
-
-
-
-
     }
 
 
@@ -1081,6 +1075,16 @@ implements
 
     private final void toSQLBegin(RenderContext context) {
         if (!isSQLUsable() && context.family() == POSTGRES) {}
+
+
+
+
+
+
+
+
+
+
 
 
 

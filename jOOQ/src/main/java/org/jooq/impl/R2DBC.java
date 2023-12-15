@@ -37,6 +37,8 @@
  */
 package org.jooq.impl;
 
+import static org.jooq.SQLDialect.MARIADB;
+import static org.jooq.SQLDialect.MYSQL;
 // ...
 import static org.jooq.ContextConverter.scoped;
 import static org.jooq.conf.ParamType.NAMED;
@@ -66,7 +68,11 @@ import java.sql.Types;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.Year;
 import java.util.Properties;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -107,6 +113,7 @@ import org.jooq.tools.JooqLogger;
 import org.jooq.tools.jdbc.DefaultPreparedStatement;
 import org.jooq.tools.jdbc.DefaultResultSet;
 import org.jooq.tools.jdbc.MockArray;
+import org.jooq.types.Interval;
 
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscriber;
@@ -120,6 +127,7 @@ import io.r2dbc.spi.ConnectionFactoryOptions;
 import io.r2dbc.spi.ConnectionFactoryOptions.Builder;
 import io.r2dbc.spi.Result.RowSegment;
 import io.r2dbc.spi.Option;
+import io.r2dbc.spi.R2dbcException;
 import io.r2dbc.spi.Result;
 import io.r2dbc.spi.Row;
 import io.r2dbc.spi.RowMetadata;
@@ -421,33 +429,42 @@ final class R2DBC {
         @Override
         final void onNext0(Connection c) {
             try {
-                Rendered rendered = rendered(configuration, query);
-                Statement stmt = c.createStatement(sql = rendered.sql);
-                new DefaultBindContext(configuration, null, new R2DBCPreparedStatement(configuration, stmt)).visit(rendered.bindValues);
+                if (query.isExecutable()) {
+                    Rendered rendered = rendered(configuration, query);
+                    Statement stmt = c.createStatement(sql = rendered.sql);
+                    new DefaultBindContext(configuration, null, new R2DBCPreparedStatement(configuration, stmt)).visit(rendered.bindValues);
 
-                // TODO: Reuse org.jooq.impl.Tools.setFetchSize(ExecuteContext ctx, int fetchSize)
-                AbstractResultQuery<?> q1 = abstractResultQuery(query);
-                if (q1 != null) {
-                    int f = SettingsTools.getFetchSize(q1.fetchSize(), configuration.settings());
+                    // TODO: Reuse org.jooq.impl.Tools.setFetchSize(ExecuteContext ctx, int fetchSize)
+                    AbstractResultQuery<?> q1 = abstractResultQuery(query);
+                    if (q1 != null) {
+                        int f = SettingsTools.getFetchSize(q1.fetchSize(), configuration.settings());
 
-                    if (f != 0) {
-                        if (log.isDebugEnabled())
-                            log.debug("Setting fetch size", f);
+                        if (f != 0) {
+                            if (log.isDebugEnabled())
+                                log.debug("Setting fetch size", f);
 
-                        stmt.fetchSize(f);
+                            stmt.fetchSize(f);
+                        }
                     }
+
+                    AbstractDMLQuery<?> q2 = abstractDMLQuery(query);
+                    if (q2 != null
+                            && !q2.returning.isEmpty()
+
+
+
+                            && !q2.nativeSupportReturningOrDataChangeDeltaTable(configuration.dsl()))
+                        stmt.returnGeneratedValues(Tools.map(q2.returningResolvedAsterisks, Field::getName, String[]::new));
+
+                    stmt.execute().subscribe(resultSubscriber.apply(query, downstream));
                 }
+                else {
+                    if (log.isDebugEnabled())
+                        log.debug("Query is not executable", query);
 
-                AbstractDMLQuery<?> q2 = abstractDMLQuery(query);
-                if (q2 != null
-                        && !q2.returning.isEmpty()
-
-
-
-                        && !q2.nativeSupportReturningOrDataChangeDeltaTable(configuration.dsl()))
-                    stmt.returnGeneratedValues(Tools.map(q2.returningResolvedAsterisks, Field::getName, String[]::new));
-
-                stmt.execute().subscribe(resultSubscriber.apply(query, downstream));
+                    Subscriber<Result> s = resultSubscriber.apply(query, downstream);
+                    s.onSubscribe(new NoOpSubscription(s));
+                }
             }
 
             // [#13343] Cancel the downstream in case of a rendering bug in jOOQ
@@ -455,6 +472,18 @@ final class R2DBC {
                 downstream.cancel();
                 onError(t);
             }
+        }
+    }
+
+    static final record NoOpSubscription(Subscriber<?> subscriber) implements Subscription {
+        @Override
+        public void request(long n) {
+            subscriber.onComplete();
+        }
+
+        @Override
+        public void cancel() {
+            subscriber.onComplete();
         }
     }
 
@@ -721,24 +750,38 @@ final class R2DBC {
                         subscriber::onError,
 
                         // [#13502] Implement Savepoint logic for nested transactions
-                        () -> transactional.run(c instanceof NonClosingConnection
-                                ? configuration
-                                : configuration.derive(new DefaultConnectionFactory(c))).subscribe(subscriber(
-                            s1 -> s1.request(Long.MAX_VALUE),
-                            subscriber::onNext,
-                            e -> c.rollbackTransaction().subscribe(subscriber(
-                                s2 -> s2.request(1),
-                                v -> {},
-                                t -> cancel0(true, () -> subscriber.onError(t)),
-                                () -> cancel0(true, () -> subscriber.onError(e))
-                            )),
-                            () -> c.commitTransaction().subscribe(subscriber(
-                                s2 -> s2.request(1),
-                                v -> {},
-                                t -> cancel0(true, () -> subscriber.onError(t)),
-                                () -> cancel0(true, () -> subscriber.onComplete())
-                            ))
-                        ))
+                        () -> {
+                            try {
+                                transactional.run(c instanceof NonClosingConnection
+                                        ? configuration
+                                        : configuration.derive(new DefaultConnectionFactory(c))).subscribe(subscriber(
+                                    s1 -> s1.request(Long.MAX_VALUE),
+                                    subscriber::onNext,
+                                    e -> rollback(subscriber, c, e),
+                                    () -> c.commitTransaction().subscribe(subscriber(
+                                        s2 -> s2.request(1),
+                                        v -> {},
+                                        t -> cancel0(true, () -> subscriber.onError(t)),
+                                        () -> cancel0(true, () -> subscriber.onComplete())
+                                    ))
+                                ));
+                            }
+
+                            // [#15702] The TransactionalPublishable might throw exceptions
+                            //          while initialising a Publisher
+                            catch (Exception e) {
+                                rollback(subscriber, c, e);
+                            }
+                        }
+                    ));
+                }
+
+                private final void rollback(Subscriber<? super T> s, Connection c, Throwable e) {
+                    c.rollbackTransaction().subscribe(subscriber(
+                        s2 -> s2.request(1),
+                        v -> {},
+                        t -> cancel0(true, () -> s.onError(t)),
+                        () -> cancel0(true, () -> s.onError(e))
                     ));
                 }
             };
@@ -846,6 +889,40 @@ final class R2DBC {
     // JDBC to R2DBC bridges for better interop, where it doesn't matter
     // -------------------------------------------------------------------------
 
+    static final class R2DBCGenericException extends R2dbcException {
+        R2DBCGenericException(Throwable cause) {
+            super(cause);
+        }
+    }
+
+    static final void wrapExceptions(Runnable runnable) {
+        try {
+            runnable.run();
+        }
+        catch (R2dbcException e) {
+            throw e;
+        }
+
+        // [#15028] Wrap IllegalArgumentException or NoSuchElementException in a more traceable exception
+        catch (Exception e) {
+            throw new R2DBCGenericException(e);
+        }
+    }
+
+    static final <T> T wrapExceptions(Callable<T> callable) {
+        try {
+            return callable.call();
+        }
+        catch (R2dbcException e) {
+            throw e;
+        }
+
+        // [#15028] Wrap IllegalArgumentException or NoSuchElementException in a more traceable exception
+        catch (Exception e) {
+            throw new R2DBCGenericException(e);
+        }
+    }
+
     static final class R2DBCPreparedStatement extends DefaultPreparedStatement {
 
         final Configuration c;
@@ -859,7 +936,8 @@ final class R2DBC {
         }
 
         private final void bindNonNull(int parameterIndex, Object x) {
-            switch (c.family()) {
+            wrapExceptions(() -> {
+                switch (c.family()) {
 
 
 
@@ -867,14 +945,16 @@ final class R2DBC {
 
 
 
-                default:
-                    s.bind(parameterIndex - 1, x);
-                    break;
-            }
+                    default:
+                        s.bind(parameterIndex - 1, x);
+                        break;
+                }
+            });
         }
 
         private final <T> void bindNull(int parameterIndex, Class<T> type) {
-            switch (c.family()) {
+            wrapExceptions(() -> {
+                switch (c.family()) {
 
 
 
@@ -882,10 +962,11 @@ final class R2DBC {
 
 
 
-                default:
-                    s.bindNull(parameterIndex - 1, type);
-                    break;
-            }
+                    default:
+                        s.bindNull(parameterIndex - 1, type);
+                        break;
+                }
+            });
         }
 
         private final <T> void bindNullable(int parameterIndex, T x, Class<T> type) {
@@ -914,6 +995,8 @@ final class R2DBC {
             }
         }
 
+        private static final Set<SQLDialect> NO_SUPPORT_UUID = SQLDialect.supportedBy(MARIADB, MYSQL);
+
         private final Class<?> nullType(Class<?> type) {
 
             // [#11700] Intercept JDBC temporal types, which aren't supported by R2DBC
@@ -923,13 +1006,19 @@ final class R2DBC {
                 return LocalTime.class;
             else if (type == Timestamp.class)
                 return LocalDateTime.class;
+            else if (type == Year.class)
+                return Integer.class;
             else if (type == XML.class)
                 return String.class;
             else if (type == JSON.class)
                 return String.class;
             else if (type == JSONB.class)
                 return String.class;
+            else if (type == UUID.class && NO_SUPPORT_UUID.contains(c.dialect()))
+                return String.class;
             else if (Enum.class.isAssignableFrom(type))
+                return String.class;
+            else if (Interval.class.isAssignableFrom(type))
                 return String.class;
 
 
@@ -1104,18 +1193,24 @@ final class R2DBC {
         }
 
         private final <T, U> U nullable(int columnIndex, Class<T> type, Function<? super T, ? extends U> conversion) {
-            T t = wasNull(r.get(columnIndex - 1, type));
-            return wasNull ? null : conversion.apply(t);
+            return wrapExceptions(() -> {
+                T t = wasNull(r.get(columnIndex - 1, type));
+                return wasNull ? null : conversion.apply(t);
+            });
         }
 
         private final <U> U nullable(int columnIndex, Function<? super Object, ? extends U> conversion) {
-            Object t = wasNull(r.get(columnIndex - 1));
-            return wasNull ? null : conversion.apply(t);
+            return wrapExceptions(() -> {
+                Object t = wasNull(r.get(columnIndex - 1));
+                return wasNull ? null : conversion.apply(t);
+            });
         }
 
         private final <T> T nonNull(int columnIndex, Class<T> type, T nullValue) {
-            T t = wasNull(r.get(columnIndex - 1, type));
-            return wasNull ? nullValue : t;
+            return wrapExceptions(() -> {
+                T t = wasNull(r.get(columnIndex - 1, type));
+                return wasNull ? nullValue : t;
+            });
         }
 
         @Override
@@ -1223,26 +1318,30 @@ final class R2DBC {
 
             @Override
             public final <T> T get(int index, Class<T> uType) {
-                switch (c.family()) {
-                    case H2:
-                    case MYSQL:
-                        return get0(r.get(index), uType);
+                return wrapExceptions(() -> {
+                    switch (c.family()) {
+                        case H2:
+                        case MYSQL:
+                            return get0(r.get(index), uType);
 
-                    default:
-                        return r.get(index, uType);
-                }
+                        default:
+                            return r.get(index, uType);
+                    }
+                });
             }
 
             @Override
             public final <T> T get(String name, Class<T> uType) {
-                switch (c.family()) {
-                    case H2:
-                    case MYSQL:
-                        return get0(r.get(name), uType);
+                return wrapExceptions(() -> {
+                    switch (c.family()) {
+                        case H2:
+                        case MYSQL:
+                            return get0(r.get(name), uType);
 
-                    default:
-                        return r.get(name, uType);
-                }
+                        default:
+                            return r.get(name, uType);
+                    }
+                });
             }
 
             @SuppressWarnings("unchecked")
@@ -1504,7 +1603,11 @@ final class R2DBC {
         @Override
         final void request0() {
             try {
-                subscriber.onNext(query.execute());
+                if (query.isExecutable())
+                    subscriber.onNext(query.execute());
+                else if (log.isDebugEnabled())
+                    log.debug("Query is not executable", query);
+
                 subscriber.onComplete();
             }
             catch (Throwable t) {

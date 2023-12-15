@@ -45,6 +45,8 @@ import org.jooq.Configuration;
 import org.jooq.ExecuteContext;
 import org.jooq.Field;
 
+import io.r2dbc.spi.R2dbcException;
+
 /**
  * @author Lukas Eder
  */
@@ -60,17 +62,27 @@ final class DefaultBindContext extends AbstractBindContext {
         int nextIndex = nextIndex();
 
         try {
-            ((Field<Object>) field).getBinding().set(
-                new DefaultBindingSetStatementContext<>(new SimpleExecuteContext(configuration(), data()), stmt, nextIndex, value)
-            );
+            ((Field<Object>) field).getBinding().set(new DefaultBindingSetStatementContext<>(
+                executeContext() != null
+                    ? executeContext()
+                    : new SimpleExecuteContext(configuration(), data()),
+                stmt,
+                nextIndex,
+                value
+            ));
         }
 
         // [#14696] Maintain SQLState and ErrorCode if the exception is from the driver
         catch (SQLException e) {
             throw new SQLException("Error while writing value at JDBC bind index: " + nextIndex, e.getSQLState(), e.getErrorCode(), e);
         }
+
+        // [#15028] Avoid misleading error when the original exception is an R2DBC one
+        catch (R2dbcException e) {
+            throw new SQLException("Error while writing value at R2DBC bind index: " + (nextIndex - 1), e.getSqlState(), e.getErrorCode(), e);
+        }
         catch (Exception e) {
-            throw new SQLException("Error while writing value at JDBC bind index: " + nextIndex, e);
+            throw new SQLException("Error while writing value at bind index: " + nextIndex, e);
         }
 
         return this;

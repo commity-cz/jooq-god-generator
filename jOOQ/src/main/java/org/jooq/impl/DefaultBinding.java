@@ -276,6 +276,7 @@ import org.jooq.exception.MappingException;
 import org.jooq.exception.SQLDialectNotSupportedException;
 import org.jooq.impl.Cast.CastNative;
 import org.jooq.impl.R2DBC.R2DBCPreparedStatement;
+import org.jooq.impl.Tools.ExtendedDataKey;
 import org.jooq.tools.JooqLogger;
 import org.jooq.tools.Longs;
 import org.jooq.tools.StringUtils;
@@ -1118,6 +1119,11 @@ public class DefaultBinding<T, U> implements Binding<T, U> {
 
         @SuppressWarnings("unused")
         /* non-final */ void sqlInline0(BindingSQLContext<U> ctx, T value) throws SQLException {
+            sqlInline1(ctx, value);
+        }
+
+        @SuppressWarnings("unused")
+        final void sqlInline1(BindingSQLContext<U> ctx, Object value) throws SQLException {
 
             // Known fall-through types:
             // - Blob, Clob
@@ -3712,6 +3718,22 @@ public class DefaultBinding<T, U> implements Binding<T, U> {
             }
         }
 
+
+        @SuppressWarnings({ "unchecked", "rawtypes" })
+        @Override
+        void sqlInline0(BindingSQLContext<U> ctx, Object value) throws SQLException {
+            Binding<?, ?> b = binding(DefaultDataType.getDataType(
+                DEFAULT, (Class<Object>) value.getClass(), SQLDataType.OTHER
+            ));
+
+            if (b instanceof DefaultOtherBinding )
+                super.sqlInline0(ctx, value);
+            else if (b instanceof InternalBinding i)
+                i.sqlInline0(ctx, value);
+            else
+                super.sqlInline0(ctx, value);
+        }
+
         @Override
         final void set0(BindingSetSQLOutputContext<U> ctx, Object value) throws SQLException {
             throw new DataTypeException("Type " + dataType + " is not supported");
@@ -4082,6 +4104,11 @@ public class DefaultBinding<T, U> implements Binding<T, U> {
             if (object == null)
                 return null;
 
+            // [#15395] The ResultSet::getObject method returned a UDTRecord (i.e. it's a MockResultSet).
+            //          As such, we can skip the serialisation / deserialisation logic.
+            else if (object instanceof Record r)
+                return r;
+
             String s = object.toString();
             List<String> values = PostgresUtils.toPGObject(s);
 
@@ -4399,6 +4426,17 @@ public class DefaultBinding<T, U> implements Binding<T, U> {
 
         @Override
         final void set0(BindingSetStatementContext<U> ctx, String value) throws SQLException {
+
+
+
+
+
+
+
+
+
+
+
             ctx.statement().setString(ctx.index(), value);
         }
 
@@ -4833,15 +4871,23 @@ public class DefaultBinding<T, U> implements Binding<T, U> {
         final UUID get0(BindingGetResultSetContext<U> ctx) throws SQLException {
             switch (ctx.family()) {
 
-                // [#1624] Some JDBC drivers natively support the
-                // java.util.UUID data type
-
+                // [#1624] Some JDBC drivers natively support the java.util.UUID data type
+                // [#8439] In edge cases (e.g. arrays over domains) the type info may have
+                //         been lost between server and JDBC driver, so let's expect PGobject
 
 
                 case H2:
                 case POSTGRES:
-                case YUGABYTEDB:
-                    return Convert.convert(ctx.resultSet().getObject(ctx.index()), UUID.class);
+                case YUGABYTEDB: {
+                    Object o = ctx.resultSet().getObject(ctx.index());
+
+                    if (o == null)
+                        return null;
+                    else if (o instanceof UUID u)
+                        return u;
+                    else
+                        return Convert.convert(o.toString(), UUID.class);
+                }
 
 
 
@@ -5619,9 +5665,9 @@ public class DefaultBinding<T, U> implements Binding<T, U> {
                 bytes(ctx.configuration()).sqlInline0(ctx, bytesConverter(ctx.configuration()).to(value, ctx.converterContext()));
             }
             else {
-                super.sqlInline0(ctx, value);
+                super.sqlInline1(ctx, value.data());
 
-                if (ctx.family() == H2 && value != null)
+                if (ctx.family() == H2)
                     ctx.render().sql(' ').visit(K_FORMAT).sql(' ').visit(K_JSON);
             }
         }

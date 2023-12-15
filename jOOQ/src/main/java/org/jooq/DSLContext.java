@@ -9704,7 +9704,7 @@ public interface DSLContext extends Scope {
      * @see DSL#commentOnColumn(String)
      */
     @NotNull @CheckReturnValue
-    @Support({ FIREBIRD, H2, HSQLDB, MARIADB, POSTGRES, YUGABYTEDB })
+    @Support({ FIREBIRD, H2, HSQLDB, POSTGRES, YUGABYTEDB })
     CommentOnIsStep commentOnColumn(@Stringly.Name String field);
 
     /**
@@ -9713,7 +9713,7 @@ public interface DSLContext extends Scope {
      * @see DSL#commentOnColumn(Name)
      */
     @NotNull @CheckReturnValue
-    @Support({ FIREBIRD, H2, HSQLDB, MARIADB, POSTGRES, YUGABYTEDB })
+    @Support({ FIREBIRD, H2, HSQLDB, POSTGRES, YUGABYTEDB })
     CommentOnIsStep commentOnColumn(Name field);
 
     /**
@@ -9722,7 +9722,7 @@ public interface DSLContext extends Scope {
      * @see DSL#commentOnColumn(Field)
      */
     @NotNull @CheckReturnValue
-    @Support({ FIREBIRD, H2, HSQLDB, MARIADB, POSTGRES, YUGABYTEDB })
+    @Support({ FIREBIRD, H2, HSQLDB, POSTGRES, YUGABYTEDB })
     CommentOnIsStep commentOnColumn(Field<?> field);
 
     /**
@@ -12850,6 +12850,20 @@ public interface DSLContext extends Scope {
      * <code>DSLContext</code> and return a single value.
      *
      * @param field The field for which to fetch a single value.
+     * @param condition The condition for which to fetch a single value.
+     * @return The value or <code>null</code>, if no record was found.
+     * @throws DataAccessException if something went wrong executing the query
+     * @throws TooManyRowsException if the query returned more than one record
+     */
+    @Support
+    @Blocking
+    <T> T fetchValue(TableField<?, T> field, Condition condition) throws DataAccessException, TooManyRowsException;
+
+    /**
+     * Execute a {@link ResultQuery} in the context of this
+     * <code>DSLContext</code> and return a single value.
+     *
+     * @param field The field for which to fetch a single value.
      * @return The value or <code>null</code>, if no record was found.
      * @throws DataAccessException if something went wrong executing the query
      */
@@ -12890,6 +12904,23 @@ public interface DSLContext extends Scope {
     <T> Optional<T> fetchOptionalValue(TableField<?, T> field) throws DataAccessException, TooManyRowsException, InvalidResultException;
 
     /**
+     * Execute a {@link ResultQuery} in the context of this
+     * <code>DSLContext</code> and return a single value.
+     *
+     * @param field The field for which to fetch a single value.
+     * @param condition The condition for which to fetch a single value.
+     * @return The value.
+     * @throws DataAccessException if something went wrong executing the query
+     * @throws TooManyRowsException if the query returned more than one record
+     * @throws InvalidResultException if the query returned a record with more
+     *             than one value
+     */
+    @NotNull
+    @Support
+    @Blocking
+    <T> Optional<T> fetchOptionalValue(TableField<?, T> field, Condition condition) throws DataAccessException, TooManyRowsException, InvalidResultException;
+
+    /**
      * Fetch all values from a single column table.
      *
      * @param table The table from which to fetch values
@@ -12925,6 +12956,19 @@ public interface DSLContext extends Scope {
     @Support
     @Blocking
     <T> List<T> fetchValues(TableField<?, T> field) throws DataAccessException;
+
+    /**
+     * Fetch all values in a given {@link Table}'s {@link TableField}.
+     *
+     * @param field The field for which to fetch values.
+     * @param condition The condition for which to fetch values.
+     * @return The values. This will never be <code>null</code>.
+     * @throws DataAccessException if something went wrong executing the query
+     */
+    @NotNull
+    @Support
+    @Blocking
+    <T> List<T> fetchValues(TableField<?, T> field, Condition condition) throws DataAccessException;
 
     /**
      * Execute the query and return a {@link Map} with the first column as the
@@ -14748,13 +14792,20 @@ public interface DSLContext extends Scope {
     /**
      * Insert one record.
      * <p>
-     * This executes something like the following statement:
-     * <pre><code>INSERT INTO [table] … VALUES [record] </code></pre>
+     * This executes the following statement:
+     *
+     * <pre>
+     * <code>INSERT INTO [table] ([modified columns in record])
+     * VALUES ([modified values in record])</code>
+     * </pre>
      * <p>
-     * Unlike {@link UpdatableRecord#store()}, this does not change any of the
+     * Unlike {@link UpdatableRecord#insert()}, this does not change any of the
      * argument <code>record</code>'s internal "changed" flags, such that a
-     * subsequent call to {@link UpdatableRecord#store()} might lead to another
+     * subsequent call to {@link UpdatableRecord#insert()} might lead to another
      * <code>INSERT</code> statement being executed.
+     * <p>
+     * Also any optimistic locking related {@link Settings} do not apply for
+     * this method.
      *
      * @return The number of inserted records
      * @throws DataAccessException if something went wrong executing the query
@@ -14765,7 +14816,17 @@ public interface DSLContext extends Scope {
 
     /**
      * Update a table.
-     * <pre><code>UPDATE [table] SET [modified values in record] WHERE [record is supplied record] </code></pre>
+     * <p>
+     * This executes the following statement:
+     *
+     * <pre>
+     * <code>UPDATE [table]
+     * SET [modified values in record]
+     * WHERE [record is supplied record]</code>
+     * </pre>
+     * <p>
+     * Any optimistic locking related {@link Settings} do not apply for this
+     * method.
      *
      * @return The number of updated records
      * @throws DataAccessException if something went wrong executing the query
@@ -14776,7 +14837,17 @@ public interface DSLContext extends Scope {
 
     /**
      * Update a table.
-     * <pre><code>UPDATE [table] SET [modified values in record] WHERE [condition]</code></pre>
+     * <p>
+     * This executes the following statement:
+     *
+     * <pre>
+     * <code>UPDATE [table]
+     * SET [modified values in record]
+     * WHERE [condition]</code>
+     * </pre>
+     * <p>
+     * Any optimistic locking related {@link Settings} do not apply for this
+     * method.
      *
      * @return The number of updated records
      * @throws DataAccessException if something went wrong executing the query
@@ -14787,7 +14858,15 @@ public interface DSLContext extends Scope {
 
     /**
      * Delete a record from a table.
-     * <pre><code>DELETE FROM [table] WHERE [record is supplied record]</code></pre>
+     * <p>
+     * This executes the following statement:
+     *
+     * <pre>
+     * <code>DELETE FROM [table] WHERE [record is supplied record]</code>
+     * </pre>
+     * <p>
+     * Any optimistic locking related {@link Settings} do not apply for this
+     * method.
      *
      * @return The number of deleted records
      * @throws DataAccessException if something went wrong executing the query
@@ -14798,7 +14877,15 @@ public interface DSLContext extends Scope {
 
     /**
      * Delete a record from a table.
-     * <pre><code>DELETE FROM [table] WHERE [condition]</code></pre>
+     * <p>
+     * This executes the following statement:
+     *
+     * <pre>
+     * <code>DELETE FROM [table] WHERE [condition]</code>
+     * </pre>
+     * <p>
+     * Any optimistic locking related {@link Settings} do not apply for this
+     * method.
      *
      * @return The number of deleted records
      * @throws DataAccessException if something went wrong executing the query

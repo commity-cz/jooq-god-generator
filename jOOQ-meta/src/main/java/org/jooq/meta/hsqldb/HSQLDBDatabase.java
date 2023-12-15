@@ -39,6 +39,7 @@
 package org.jooq.meta.hsqldb;
 
 import static org.jooq.Records.mapping;
+import static org.jooq.impl.DSL.coalesce;
 import static org.jooq.impl.DSL.decode;
 import static org.jooq.impl.DSL.falseCondition;
 import static org.jooq.impl.DSL.field;
@@ -54,6 +55,7 @@ import static org.jooq.impl.SQLDataType.NUMERIC;
 import static org.jooq.impl.SQLDataType.VARCHAR;
 import static org.jooq.meta.hsqldb.information_schema.Tables.CHECK_CONSTRAINTS;
 import static org.jooq.meta.hsqldb.information_schema.Tables.COLUMNS;
+import static org.jooq.meta.hsqldb.information_schema.Tables.DOMAINS;
 import static org.jooq.meta.hsqldb.information_schema.Tables.DOMAIN_CONSTRAINTS;
 import static org.jooq.meta.hsqldb.information_schema.Tables.ELEMENT_TYPES;
 import static org.jooq.meta.hsqldb.information_schema.Tables.KEY_COLUMN_USAGE;
@@ -69,12 +71,17 @@ import static org.jooq.meta.hsqldb.information_schema.Tables.VIEWS;
 import java.math.BigDecimal;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Set;
 
 import org.jooq.DSLContext;
 import org.jooq.Field;
+import org.jooq.Name;
 import org.jooq.Record;
 import org.jooq.Record12;
 import org.jooq.Record4;
@@ -85,7 +92,6 @@ import org.jooq.SQLDialect;
 import org.jooq.SortOrder;
 import org.jooq.TableOptions.TableType;
 import org.jooq.impl.DSL;
-import org.jooq.impl.SQLDataType;
 import org.jooq.meta.AbstractDatabase;
 import org.jooq.meta.AbstractIndexDefinition;
 import org.jooq.meta.ArrayDefinition;
@@ -112,6 +118,7 @@ import org.jooq.meta.XMLSchemaCollectionDefinition;
 import org.jooq.meta.hsqldb.information_schema.tables.CheckConstraints;
 import org.jooq.meta.hsqldb.information_schema.tables.Columns;
 import org.jooq.meta.hsqldb.information_schema.tables.DomainConstraints;
+import org.jooq.meta.hsqldb.information_schema.tables.Domains;
 import org.jooq.meta.hsqldb.information_schema.tables.KeyColumnUsage;
 import org.jooq.tools.JooqLogger;
 import org.jooq.tools.StringUtils;
@@ -514,50 +521,63 @@ public class HSQLDBDatabase extends AbstractDatabase implements ResultQueryDatab
 
     @Override
     protected List<DomainDefinition> getDomains0() throws SQLException {
-        List<DomainDefinition> result = new ArrayList<>();
+        Map<Name, DefaultDomainDefinition> result = new LinkedHashMap<>();
 
+        Domains d = DOMAINS.as("d");
         DomainConstraints dc = DOMAIN_CONSTRAINTS.as("dc");
 
         for (Record record : create()
             .select(
-                dc.domains().DOMAIN_SCHEMA,
-                dc.domains().DOMAIN_NAME,
-                dc.domains().DATA_TYPE,
-                dc.domains().CHARACTER_MAXIMUM_LENGTH,
-                dc.domains().NUMERIC_PRECISION,
-                dc.domains().NUMERIC_SCALE,
-                dc.domains().DOMAIN_DEFAULT,
+                d.DOMAIN_SCHEMA,
+                d.DOMAIN_NAME,
+                d.DATA_TYPE,
+                d.CHARACTER_MAXIMUM_LENGTH,
+                coalesce(d.NUMERIC_PRECISION, d.DATETIME_PRECISION).as(d.NUMERIC_PRECISION),
+                d.NUMERIC_SCALE,
+                d.DOMAIN_DEFAULT,
                 dc.checkConstraints().CHECK_CLAUSE)
-            .from(dc)
-            .where(dc.domains().DOMAIN_SCHEMA.in(getInputSchemata()))
-            .orderBy(dc.domains().DOMAIN_SCHEMA, dc.domains().DOMAIN_NAME)
+            .from(d)
+            .leftJoin(dc)
+                .on(d.DOMAIN_CATALOG.eq(dc.DOMAIN_CATALOG))
+                .and(d.DOMAIN_SCHEMA.eq(dc.DOMAIN_SCHEMA))
+                .and(d.DOMAIN_NAME.eq(dc.DOMAIN_NAME))
+            .where(d.DOMAIN_SCHEMA.in(getInputSchemata()))
+            .orderBy(
+                d.DOMAIN_SCHEMA,
+                d.DOMAIN_NAME,
+                dc.checkConstraints().CONSTRAINT_NAME
+            )
         ) {
-            SchemaDefinition schema = getSchema(record.get(dc.domains().DOMAIN_SCHEMA));
+            String schemaName = record.get(d.DOMAIN_SCHEMA);
+            String domainName = record.get(d.DOMAIN_NAME);
+            String check = record.get(dc.checkConstraints().CHECK_CLAUSE);
 
-            DataTypeDefinition baseType = new DefaultDataTypeDefinition(
-                this,
-                schema,
-                record.get(dc.domains().DATA_TYPE),
-                record.get(dc.domains().CHARACTER_MAXIMUM_LENGTH),
-                record.get(dc.domains().NUMERIC_PRECISION),
-                record.get(dc.domains().NUMERIC_SCALE),
-                true,
-                record.get(dc.domains().DOMAIN_DEFAULT)
-            );
+            DefaultDomainDefinition domain = result.computeIfAbsent(name(schemaName, domainName), k -> {
+                SchemaDefinition schema = getSchema(schemaName);
 
-            DefaultDomainDefinition domain = new DefaultDomainDefinition(
-                schema,
-                record.get(dc.domains().DOMAIN_NAME),
-                baseType
-            );
+                DataTypeDefinition baseType = new DefaultDataTypeDefinition(
+                    this,
+                    schema,
+                    record.get(d.DATA_TYPE),
+                    record.get(d.CHARACTER_MAXIMUM_LENGTH),
+                    record.get(d.NUMERIC_PRECISION),
+                    record.get(d.NUMERIC_SCALE),
+                    true,
+                    record.get(d.DOMAIN_DEFAULT)
+                );
 
-            if (!StringUtils.isBlank(record.get(dc.checkConstraints().CHECK_CLAUSE)))
-                domain.addCheckClause(record.get(dc.checkConstraints().CHECK_CLAUSE));
+                return new DefaultDomainDefinition(
+                    schema,
+                    domainName,
+                    baseType
+                );
+            });
 
-            result.add(domain);
+            if (!StringUtils.isBlank(check))
+                domain.addCheckClause(check);
         }
 
-        return result;
+        return new ArrayList<>(result.values());
     }
 
     @Override

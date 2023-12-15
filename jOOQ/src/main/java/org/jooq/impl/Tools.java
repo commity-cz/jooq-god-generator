@@ -71,6 +71,7 @@ import static org.jooq.SQLDialect.POSTGRES;
 // ...
 // ...
 // ...
+// ...
 import static org.jooq.SQLDialect.SQLITE;
 // ...
 // ...
@@ -947,6 +948,12 @@ final class Tools {
 
 
 
+
+
+
+
+
+
         /**
          * [#9017] We've already transformed ROWNUM expressions to LIMIT.
          */
@@ -1553,7 +1560,7 @@ final class Tools {
         Converter<T, U> result = configuration(configuration).converterProvider().provide(tType, uType);
 
         if (result == null)
-            result = CONFIG.converterProvider().provide(tType, uType);
+            result = CONFIG.get().converterProvider().provide(tType, uType);
 
         // [#11823] [#12208] The new ad-hoc conversion API tries to avoid the Class<U> literal
         //                   meaning there are perfectly reasonable API usages when using MULTISET
@@ -2064,6 +2071,10 @@ final class Tools {
         // [#13251] Rows can be mixed with values in ROW constructors
         else if (value instanceof AbstractRow<?> r)
             return (Field<T>) r.rf();
+
+        // [#15008] Tables can be mixed with values in ROW constructors
+        else if (value instanceof AbstractTable<?> t)
+            return (Field<T>) t.tf();
 
         // [#4771] Any other QueryPart type is not supported here
         else if (value instanceof QueryPart)
@@ -3774,14 +3785,14 @@ final class Tools {
 
 
 
-    static final Configuration CONFIG          = new DefaultConfiguration();
-    static final Configuration CONFIG_UNQUOTED = new DefaultConfiguration();
+    static final Lazy<Configuration> CONFIG          = Lazy.of(() -> new DefaultConfiguration());
+    static final Lazy<Configuration> CONFIG_UNQUOTED = Lazy.of(() -> {
+        DefaultConfiguration c = new DefaultConfiguration();
+        c.settings().setRenderQuotedNames(RenderQuotedNames.NEVER);
+        return c;
+    });
 
-    static {
-        CONFIG_UNQUOTED.settings().setRenderQuotedNames(RenderQuotedNames.NEVER);
-    }
-
-    static final DSLContext    CTX             = DSL.using(CONFIG);
+    static final Lazy<DSLContext>    CTX             = Lazy.of(() -> DSL.using(CONFIG.get()));
 
     /**
      * A possibly inefficient but stable way to generate an alias for any
@@ -3891,6 +3902,8 @@ final class Tools {
         else
             return null;
     }
+
+
 
 
 
@@ -4261,7 +4274,7 @@ final class Tools {
             }
 
             return result;
-        }, REFLECTION_CACHE_GET_ANNOTATED_MEMBERS, () -> Cache.key(type, name));
+        }, REFLECTION_CACHE_GET_ANNOTATED_MEMBERS, () -> Cache.key(type, name, makeAccessible));
     }
 
     private static final boolean namesMatch(String name, String annotation) {
@@ -4296,7 +4309,7 @@ final class Tools {
                     result.add(accessible(member, makeAccessible));
 
             return result;
-        }, REFLECTION_CACHE_GET_MATCHING_MEMBERS, () -> Cache.key(type, name));
+        }, REFLECTION_CACHE_GET_MATCHING_MEMBERS, () -> Cache.key(type, name, makeAccessible));
     }
 
     /**
@@ -4347,7 +4360,7 @@ final class Tools {
             }
 
             return SourceMethod.methods(set);
-        }, REFLECTION_CACHE_GET_ANNOTATED_SETTERS, () -> Cache.key(type, name));
+        }, REFLECTION_CACHE_GET_ANNOTATED_SETTERS, () -> Cache.key(type, name, makeAccessible));
     }
 
     /**
@@ -4398,7 +4411,7 @@ final class Tools {
             }
 
             return null;
-        }, REFLECTION_CACHE_GET_ANNOTATED_GETTER, () -> Cache.key(type, name));
+        }, REFLECTION_CACHE_GET_ANNOTATED_GETTER, () -> Cache.key(type, name, makeAccessible));
     }
 
     /**
@@ -4435,7 +4448,7 @@ final class Tools {
             }
 
             return SourceMethod.methods(set);
-        }, REFLECTION_CACHE_GET_MATCHING_SETTERS, () -> Cache.key(type, name));
+        }, REFLECTION_CACHE_GET_MATCHING_SETTERS, () -> Cache.key(type, name, makeAccessible));
     }
 
 
@@ -4470,7 +4483,7 @@ final class Tools {
                         return accessible(method, makeAccessible);
 
             return null;
-        }, REFLECTION_CACHE_GET_MATCHING_GETTER, () -> Cache.key(type, name));
+        }, REFLECTION_CACHE_GET_MATCHING_GETTER, () -> Cache.key(type, name, makeAccessible));
     }
 
     /**
@@ -5516,7 +5529,13 @@ final class Tools {
     }
 
     static final void toSQLDDLTypeDeclarationForAddition(Context<?> ctx, DataType<?> type) {
+        boolean qualify = ctx.qualify();
         toSQLDDLTypeDeclaration(ctx, type);
+
+        // [#15048] While qualified type declarations are supported, we can't
+        //          have qualified field references elsewhere, e.g. in computed
+        //          column declarations.
+        ctx.qualify(false);
         toSQLDDLTypeDeclarationIdentityBeforeNull(ctx, type);
 
 
@@ -5541,6 +5560,8 @@ final class Tools {
 
 
 
+
+        ctx.qualify(qualify);
     }
 
     private static final void toSQLDDLTypeDeclarationForAdditionNullability(Context<?> ctx, DataType<?> type) {
@@ -5596,6 +5617,7 @@ final class Tools {
     }
 
     private static final Set<SQLDialect> REQUIRE_IDENTITY_AFTER_NULL = SQLDialect.supportedBy(H2, MARIADB, MYSQL);
+    private static final Set<SQLDialect> SUPPORT_PG_IDENTITY         = SQLDialect.supportedBy(POSTGRES);
 
     /**
      * If a type is an identity type, some dialects require the relevant
@@ -5621,15 +5643,9 @@ final class Tools {
                 case HSQLDB:    ctx.sql(' ').visit(K_GENERATED).sql(' ').visit(K_BY).sql(' ').visit(K_DEFAULT).sql(' ').visit(K_AS).sql(' ').visit(K_IDENTITY).sql('(').visit(K_START_WITH).sql(" 1)"); break;
                 case SQLITE:    ctx.sql(' ').visit(K_PRIMARY_KEY).sql(' ').visit(K_AUTOINCREMENT); break;
                 case POSTGRES:
-                    switch (ctx.dialect()) {
+                    if (SUPPORT_PG_IDENTITY.contains(ctx.dialect()))
+                        ctx.sql(' ').visit(K_GENERATED).sql(' ').visit(K_BY).sql(' ').visit(K_DEFAULT).sql(' ').visit(K_AS).sql(' ').visit(K_IDENTITY);
 
-
-
-
-
-                        case POSTGRES:
-                                ctx.sql(' ').visit(K_GENERATED).sql(' ').visit(K_BY).sql(' ').visit(K_DEFAULT).sql(' ').visit(K_AS).sql(' ').visit(K_IDENTITY); break;
-                    }
                     break;
 
 
@@ -5963,6 +5979,9 @@ final class Tools {
 
 
 
+        // [#15048] User defined types may need quoting, etc.
+        else if (type.getType() == Object.class && !(type instanceof BuiltInDataType))
+            ctx.visit(type.getQualifiedName());
         else
             ctx.sql(typeName);
 

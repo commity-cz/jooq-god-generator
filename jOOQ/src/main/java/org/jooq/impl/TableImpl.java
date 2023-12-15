@@ -70,6 +70,7 @@ import org.jooq.Context;
 import org.jooq.DataType;
 import org.jooq.Field;
 import org.jooq.ForeignKey;
+import org.jooq.JoinType;
 import org.jooq.Name;
 // ...
 import org.jooq.QueryPart;
@@ -80,6 +81,8 @@ import org.jooq.SQLDialect;
 import org.jooq.Schema;
 import org.jooq.Select;
 import org.jooq.Table;
+import org.jooq.TableLike;
+import org.jooq.TableOptionalOnStep;
 import org.jooq.TableOptions;
 // ...
 import org.jooq.impl.QOM.UNotYetImplemented;
@@ -218,7 +221,7 @@ implements
         }
         else if (aliased instanceof TableImpl t) {
             this.child = t.child;
-            this.childPath = t.childPath;
+            this.childPath = t.childPath == null ? null : Tools.aliasedKey(t.childPath, t.child, this);
         }
         else {
             this.child = null;
@@ -457,6 +460,11 @@ implements
         return true;
     }
 
+    @Override
+    public final TableOptionalOnStep<Record> join(TableLike<?> table, JoinType type) {
+        return super.join(table, type);
+    }
+
     // -------------------------------------------------------------------------
     // XXX: FieldsTrait "undeprecations" for generated code
     // -------------------------------------------------------------------------
@@ -524,6 +532,13 @@ implements
     // ------------------------------------------------------------------------
 
     @Override
+    public int hashCode() {
+
+        // [#7172] [#10274] [#14875] Cannot use getQualifiedName() based super implementation yet here
+        return defaultIfNull(getSchema(), DEFAULT_SCHEMA.get()).getQualifiedName().append(getUnqualifiedName()).hashCode();
+    }
+
+    @Override
     public boolean equals(Object that) {
         if (this == that)
             return true;
@@ -535,8 +550,8 @@ implements
 
                 // [#7172] [#10274] Cannot use getQualifiedName() yet here
                 StringUtils.equals(
-                    defaultIfNull(getSchema(), DEFAULT_SCHEMA),
-                    defaultIfNull(t.getSchema(), DEFAULT_SCHEMA)
+                    defaultIfNull(getSchema(), DEFAULT_SCHEMA.get()),
+                    defaultIfNull(t.getSchema(), DEFAULT_SCHEMA.get())
                 ) &&
                 StringUtils.equals(getName(), t.getName()) &&
                 Arrays.equals(parameters, t.parameters);

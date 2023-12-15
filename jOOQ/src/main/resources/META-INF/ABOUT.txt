@@ -11,6 +11,7 @@ Authors and contributors of jOOQ or parts of jOOQ in alphabetical order:
 - Brett Meyer
 - Christian Stein
 - Christopher Deckers
+- Dennis Neufeld
 - Ed Schaller
 - Eric Peters
 - Ernest Mishkin
@@ -65,6 +66,7 @@ Authors and contributors of jOOQ or parts of jOOQ in alphabetical order:
 - Vojtech Polivka
 - Wang Gaoyuan
 - Wyke Oskar
+- Xavier Oliver
 - Zoltan Tamasi
 
 See the following website for details about contributing to jOOQ:

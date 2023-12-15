@@ -42,6 +42,7 @@ import static java.lang.Boolean.TRUE;
 import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
 import static java.util.Comparator.comparing;
+import static java.util.stream.Collectors.groupingBy;
 import static org.jooq.Log.Level.ERROR;
 import static org.jooq.SQLDialect.CUBRID;
 import static org.jooq.SQLDialect.FIREBIRD;
@@ -367,6 +368,11 @@ public abstract class AbstractDatabase implements Database {
 
         try {
             configuration = create0().configuration();
+
+
+
+
+
 
 
 
@@ -1490,6 +1496,39 @@ public abstract class AbstractDatabase implements Database {
             }
         }
 
+        for (ForcedType type : configuredForcedTypes)
+            if (type.getUserType() != null && StringUtils.equals(type.getUserType(), typeName))
+                return customType(this, type);
+
+        return null;
+    }
+
+    @Override
+    public void markUsed(ForcedType forcedType) {
+        unusedForcedTypes.remove(forcedType);
+    }
+
+    @Override
+    public List<ForcedType> getUnusedForcedTypes() {
+        return new ArrayList<>(unusedForcedTypes);
+    }
+
+    @Override
+    public final void setConfiguredForcedTypes(List<ForcedType> configuredForcedTypes) {
+
+        // [#8512] Some implementation of this database may have already configured
+        //         a forced type programmatically, so we must not set the list but
+        //         append it.
+        getConfiguredForcedTypes().addAll(configuredForcedTypes);
+
+        // [#15918] This logic used to be delayed until we look up forced types, but that would mean
+        //          that hashCode() and equals() behaviour is inconsistent when adding the forced
+        //          types to unusedForcedTypes.
+        patchConfiguredForcedTypes();
+        unusedForcedTypes.addAll(getConfiguredForcedTypes());
+    }
+
+    private final void patchConfiguredForcedTypes() {
         Iterator<ForcedType> it2 = configuredForcedTypes.iterator();
 
         while (it2.hasNext()) {
@@ -1588,33 +1627,7 @@ public abstract class AbstractDatabase implements Database {
                     type.setLambdaConverter(null);
                 }
             }
-
-            if (type.getUserType() != null && StringUtils.equals(type.getUserType(), typeName)) {
-                return customType(this, type);
-            }
         }
-
-        return null;
-    }
-
-    @Override
-    public void markUsed(ForcedType forcedType) {
-        unusedForcedTypes.remove(forcedType);
-    }
-
-    @Override
-    public List<ForcedType> getUnusedForcedTypes() {
-        return new ArrayList<>(unusedForcedTypes);
-    }
-
-    @Override
-    public final void setConfiguredForcedTypes(List<ForcedType> configuredForcedTypes) {
-
-        // [#8512] Some implementation of this database may have already configured
-        //         a forced type programmatically, so we must not set the list but
-        //         append it.
-        getConfiguredForcedTypes().addAll(configuredForcedTypes);
-        unusedForcedTypes.addAll(configuredForcedTypes);
     }
 
     @Override
@@ -2614,6 +2627,20 @@ public abstract class AbstractDatabase implements Database {
 
 
 
+
+        // [#14991] Make sure shared embeddables have updated data types that
+        //          match all the referencing columns, e.g. to ensure correct
+        //          nullability.
+        result
+            .values()
+            .stream()
+            .collect(groupingBy(e -> e.getQualifiedInputNamePart()))
+            .forEach((n, l) -> {
+                for (EmbeddableDefinition e1 : l)
+                    for (EmbeddableDefinition e2 : l)
+                        if (e1 != e2)
+                            e1.merge(e2);
+            });
 
         return new ArrayList<>(result.values());
     }

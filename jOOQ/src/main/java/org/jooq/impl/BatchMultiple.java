@@ -37,11 +37,11 @@
  */
 package org.jooq.impl;
 
-import java.sql.Connection;
+import static org.jooq.impl.AbstractQuery.connection;
+
 import java.sql.SQLException;
 
 import org.jooq.Configuration;
-import org.jooq.ExecuteContext;
 import org.jooq.ExecuteContext.BatchMode;
 import org.jooq.ExecuteListener;
 import org.jooq.Query;
@@ -81,7 +81,7 @@ final class BatchMultiple extends AbstractBatch {
 
         // TODO: [#11700] Implement this
         else
-            throw new UnsupportedOperationException();
+            throw new UnsupportedOperationException("The blocking, JDBC backed implementation of reactive batching has not yet been implemented. Use the R2DBC backed implementation, instead, or avoid batching.");
     }
 
     @Override
@@ -100,7 +100,7 @@ final class BatchMultiple extends AbstractBatch {
             ctx.transformQueries(listener);
 
             if (ctx.statement() == null)
-                ctx.statement(new SettingsEnabledPreparedStatement(ctx.connection()));
+                ctx.statement(new SettingsEnabledPreparedStatement(connection(ctx)));
 
             String[] batchSQL = ctx.batchSQL();
             for (int i = 0; i < ctx.batchQueries().length; i++) {

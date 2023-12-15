@@ -47,6 +47,7 @@ import static java.util.Collections.emptyList;
 // ...
 // ...
 // ...
+// ...
 import static org.jooq.SQLDialect.DERBY;
 // ...
 import static org.jooq.SQLDialect.FIREBIRD;
@@ -148,9 +149,9 @@ final class MetaImpl extends AbstractMeta {
 
 
 
-    private static final Pattern         P_SYSINDEX_DERBY                 = Pattern.compile("^(?i:SQL\\d{14,}).*$");
+    private static final Pattern         P_SYSINDEX_DERBY                 = Pattern.compile("^(?i:SQL\\d{10,}).*$");
     private static final Pattern         P_SYSINDEX_H2                    = Pattern.compile("^(?i:PRIMARY_KEY_|UK_INDEX_|FK_INDEX_).*$");
-    private static final Pattern         P_SYSINDEX_HSQLDB                = Pattern.compile("^(?i:SYS_IDX_(?:PK|UK|FK)_).*$");
+    private static final Pattern         P_SYSINDEX_HSQLDB                = Pattern.compile("^(?i:SYS_IDX_).*$");
     private static final Pattern         P_SYSINDEX_SQLITE                = Pattern.compile("^(?i:sqlite_autoindex_).*$");
 
     private final DatabaseMetaData       databaseMetaData;
@@ -195,6 +196,48 @@ final class MetaImpl extends AbstractMeta {
         }
         catch (SQLException e) {
             throw new DataAccessException("Error while running MetaFunction", e);
+        }
+    }
+
+    private static final <T, E extends Exception> T withCatalog(Catalog catalog, DSLContext ctx, ThrowingFunction<DSLContext, T, E> supplier) throws E {
+        String previous = null;
+        Exception e = null;
+
+        try {
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            return supplier.apply(ctx);
+        }
+        catch (Exception x) {
+            e = x;
+            throw (E) x;
+        }
+        finally {
+
+
+
+
+
+
+
+
+
+
+
+
+
         }
     }
 
@@ -471,14 +514,18 @@ final class MetaImpl extends AbstractMeta {
             String sql = M_UNIQUE_KEYS(family());
 
             if (sql != null) {
-                Result<Record> result = meta(meta -> DSL.using(meta.getConnection(), family()).resultQuery(
-                    sql,
-                    NO_SUPPORT_SCHEMAS.contains(dialect())
-                        ? EMPTY_OBJECT
-                        : inverseSchemaCatalog
-                        ? new Object[] { catalog }
-                        : new Object[] { schema }
-                ).fetch());
+                Result<Record> result = meta(meta ->
+                    withCatalog(DSL.catalog(catalog), DSL.using(meta.getConnection(), family()), ctx ->
+                        ctx.resultQuery(
+                            sql,
+                            NO_SUPPORT_SCHEMAS.contains(dialect())
+                                ? EMPTY_OBJECT
+                                : inverseSchemaCatalog
+                                ? new Object[] { catalog }
+                                : new Object[] { schema }
+                        ).fetch()
+                    )
+                );
 
                 // TODO Support catalogs as well
                 Map<Record, Result<Record>> groups = result.intoGroups(new Field[] { result.field(0), result.field(1), result.field(2) });
@@ -642,7 +689,11 @@ final class MetaImpl extends AbstractMeta {
                 String sql = M_SOURCES(family());
 
                 if (sql != null) {
-                    Result<Record> result = meta(meta -> DSL.using(meta.getConnection(), family()).resultQuery(sql, MetaSchema.this.getName()).fetch());
+                    Result<Record> result = meta(meta ->
+                        withCatalog(getCatalog(), DSL.using(meta.getConnection(), family()), ctx ->
+                            ctx.resultQuery(patchSchema(sql), MetaSchema.this.getName()).fetch()
+                        )
+                    );
 
                     // TODO Support catalogs as well
                     Map<Record, Result<Record>> groups = result.intoGroups(new Field[] { result.field(0), result.field(1), result.field(2) });
@@ -663,6 +714,15 @@ final class MetaImpl extends AbstractMeta {
                 return sourceCache.get(name(MetaSchema.this.getName(), tableName));
             else
                 return null;
+        }
+
+        private final String patchSchema(String sql) {
+
+
+
+
+
+            return sql;
         }
     }
 
