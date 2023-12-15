@@ -5,6 +5,7 @@ on:
     #branches: [version-3.18.0-branch]
     paths:
       - 'jOOQ-codegen/**'
+      - '.github/**/deploy*'
 
 jobs:
   deploy:
