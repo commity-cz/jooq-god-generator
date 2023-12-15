@@ -21,7 +21,7 @@ jobs:
           distribution: 'temurin'
           cache: maven
       - name: Build with Maven
-        working-directory: jOOQ-codegen/src/main/java/org/jooq/codegen
+        working-directory: jOOQ-codegen
         run: |
           mvn -B deploy
         env:
