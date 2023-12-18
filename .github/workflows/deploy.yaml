@@ -21,6 +21,10 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
           cache: maven
+          server-id: gitlab-commity
+          # jooq-god-generator project Deployment Token (project > Settings > Repository > Deploy Tokens)
+          server-username: maven-jooq-god-generator
+          server-password: ${{ secrets.GITLAB_MAVEN_TOKEN }}
       - name: Build with Maven
         working-directory: jOOQ-codegen
         run: |

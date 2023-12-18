@@ -31,10 +31,15 @@
 
     <distributionManagement>
         <repository>
-            <id>github</id>
-            <name>GitHub Commity.cz Apache Maven Packages</name>
-            <url>https://maven.pkg.github.com/commity-cz/jooq-god-generator</url>
+            <id>gitlab-commity</id>
+            <name>Maven Packages registry in Commity Gitlab jooq-god-generator project</name>
+            <url>https://gitlab.example.com/api/v4/projects/326/packages/maven</url>
         </repository>
+        <snapshotRepository>
+            <id>gitlab-commity</id>
+            <name>Maven Packages registry in Commity Gitlab jooq-god-generator project</name>
+            <url>https://gitlab.example.com/api/v4/projects/326/packages/maven</url>
+        </snapshotRepository>
     </distributionManagement>
 
     <build>
