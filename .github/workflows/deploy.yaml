@@ -25,6 +25,8 @@ jobs:
           # jooq-god-generator project Deployment Token (project > Settings > Repository > Deploy Tokens)
           server-username: maven-jooq-god-generator
           server-password: ${{ secrets.GITLAB_MAVEN_TOKEN }}
+      - name: Debug
+        run: cat ~/.m2/settings.xml
       - name: Build with Maven
         working-directory: jOOQ-codegen
         run: |
